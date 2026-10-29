@@ -48,6 +48,46 @@ def test_api_gateway_cognito_claims_are_required_for_protected_routes():
     )[0] == 401
 
 
+def test_dashboard_uses_verified_principal_and_rejects_admins():
+    repository = DynamoDBDonationRepository(FakeDynamoTable())
+    owned = repository.create(donation())
+    status, dashboard = invoke(
+        repository,
+        "GET",
+        "/api/me/dashboard",
+        groups=["food-donors"],
+        subject="donor-sub-1",
+        query="actor_id=attacker-selected-id",
+    )
+    assert status == 200
+    assert dashboard["total_donations"] == 1
+    assert dashboard["recent_donations"][0]["id"] == owned["id"]
+    assert dashboard["data_source"] == "cloud_live"
+    assert invoke(
+        repository,
+        "GET",
+        "/api/me/dashboard",
+        groups=["food-admins"],
+    )[0] == 403
+    assert invoke(repository, "GET", "/api/me/dashboard")[0] == 401
+
+
+def test_dashboard_reports_bound_exhaustion_as_unavailable():
+    repository = DynamoDBDonationRepository(FakeDynamoTable(), max_admin_items=1)
+    repository.create(donation())
+    repository.create(donation(food_name="Second donation"))
+
+    status, result = invoke(
+        repository,
+        "GET",
+        "/api/me/dashboard",
+        groups=["food-donors"],
+        subject="donor-sub-1",
+    )
+    assert status == 503
+    assert result == {"detail": "Dashboard data is temporarily unavailable"}
+
+
 def test_create_derives_donor_from_verified_claims_not_body():
     repository = DynamoDBDonationRepository(FakeDynamoTable())
     payload = {

@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
@@ -34,6 +35,8 @@ class DonationRepository(Protocol):
     def initialize(self) -> None: ...
 
     def create(self, donation: dict) -> dict: ...
+
+    def dashboard_for_user(self, user_id: str, role: str) -> dict: ...
 
     def update_donation(
         self, donation_id: str, fields: dict, actor_id: str, role: str
@@ -1134,6 +1137,94 @@ class DynamoDBDonationRepository:
         result = self.table.query(**kwargs)
         items = [self._public_item(item) for item in result.get("Items", [])]
         return items, _encode_cursor(result.get("LastEvaluatedKey"))
+
+    def _query_all_user_donations(self, user_id: str, role: str) -> list[dict]:
+        list_page = self.list_by_donor if role == "donor" else self.list_by_claimant
+        records = []
+        cursor = None
+        while len(records) < self.max_admin_items:
+            page_size = min(100, self.max_admin_items - len(records))
+            page, cursor = list_page(user_id, page_size, cursor)
+            records.extend(page)
+            if not cursor:
+                return records
+        if cursor:
+            raise RuntimeError(
+                f"User dashboard query exceeded the configured "
+                f"{self.max_admin_items}-record bound"
+            )
+        return records
+
+    def dashboard_for_user(self, user_id: str, role: str) -> dict:
+        if role not in {"donor", "ngo"}:
+            raise ValueError("A donor or NGO role is required")
+        now = _utc_now()
+        owned_donations = self._query_all_user_donations(user_id, role)
+        marketplace_available = self._query_all_status("available")
+        available = [
+            item
+            for item in owned_donations
+            if item["status"] == "available" and item["pickup_deadline"] > now
+        ]
+        claimed = [item for item in owned_donations if item["status"] == "claimed"]
+        picked_up = [
+            item for item in owned_donations if item["status"] == "picked_up"
+        ]
+        completed_quantity_by_unit = {}
+        for item in picked_up:
+            unit = item["unit"]
+            completed_quantity_by_unit[unit] = (
+                completed_quantity_by_unit.get(unit, Decimal("0"))
+                + Decimal(str(item["quantity"]))
+            )
+
+        recent_donations = sorted(
+            owned_donations,
+            key=lambda item: (item["created_at"], item["id"]),
+            reverse=True,
+        )[:5]
+        upcoming_pickups = (
+            sorted(
+                (
+                    item
+                    for item in claimed
+                    if item["pickup_deadline"] > now
+                ),
+                key=lambda item: (item["pickup_deadline"], item["id"]),
+            )[:5]
+            if role == "ngo"
+            else []
+        )
+        recent_activity = []
+        for item in recent_donations:
+            events, _ = self.list_events("donation", item["id"], limit=10)
+            recent_activity.extend(events)
+        recent_activity.sort(
+            key=lambda event: (event["occurred_at"], event["id"]), reverse=True
+        )
+
+        return {
+            "role": role,
+            "total_donations": len(owned_donations),
+            "available_donations": len(available),
+            "marketplace_available_donations": sum(
+                item["pickup_deadline"] > now for item in marketplace_available
+            ),
+            "claimed_donations": len(claimed),
+            "completed_pickups": len(picked_up),
+            "cancelled_donations": sum(
+                item["status"] == "cancelled" for item in owned_donations
+            ),
+            "expired_donations": sum(
+                item["status"] == "expired" for item in owned_donations
+            ),
+            "completed_quantity_by_unit": completed_quantity_by_unit,
+            "upcoming_pickups": upcoming_pickups,
+            "recent_donations": recent_donations,
+            "recent_activity": recent_activity[:10],
+            "last_updated": now,
+            "data_source": "cloud_live",
+        }
 
     def _query_all_status(self, status: str) -> list[dict]:
         records = []

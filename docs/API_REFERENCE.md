@@ -16,7 +16,7 @@ The paths below are served by the local FastAPI adapter at `http://127.0.0.1:800
 | `PATCH /api/donations/{id}/status` | Cancel an available listing or confirm claimed pickup | Owning donor for cancel; claiming recipient for pickup |
 | `GET /api/donations/{id}/events?limit=25&cursor=...` | Chronological donation activity page | Participant or administrator |
 | `GET /api/me?actor_id=...` | Local synthetic profile lookup | Local demo profile only; not a production identity endpoint |
-| `GET /api/me/dashboard?actor_id=...` | Backend-derived counts, completed quantities, recent records/events, and upcoming pickups scoped to the current local donor or recipient | Local donor/recipient only; global available count is a marketplace summary; returns 501 on the cloud adapter |
+| `GET /api/me/dashboard?actor_id=...` | Backend-derived counts, completed quantities, recent records/events, and upcoming pickups scoped to the authenticated donor or NGO; global available count is a marketplace summary | Local demo uses the `actor_id` query parameter; cloud adapter derives identity and role from Cognito JWT claims |
 
 Creation/edit fields: `food_name`, `description`, `category`, positive `quantity`, `unit`, optional timezone-aware `available_at`, future timezone-aware `pickup_deadline`, and `pickup_location`. The local adapter accepts synthetic `donor_id` / `actor_id` / `ngo_id` fields to select the fixed demo identity. Cloud API requests must not send trusted actor IDs; ownership is derived from claims.
 
@@ -39,7 +39,7 @@ Creation/edit fields: `food_name`, `description`, `category`, positive `quantity
 
 Analytics filters: `start_date`, `end_date` in valid `YYYY-MM-DD` form, `status`, `category`, and `location`. Start must not be after end. Cloud analytics route validates filters and queries at most 500 records; user-count fields are `null` because cloud profile administration is not implemented.
 
-The local dashboard route uses current SQLite state, does not return records owned by another user, and groups completed quantities by their original unit. Its recent-event list is limited to the caller's own donation/claim records. It is not implemented for DynamoDB/Lambda.
+The dashboard uses current repository state, does not return records owned by another user, and groups completed quantities by their original unit. The cloud adapter derives identity from verified Cognito claims, uses indexed DynamoDB queries, and bounds each donation query to 500 records; it returns 503 if that bound is exceeded. Recent cloud activity is gathered from the five most recently created owned donations. The local demo uses SQLite and the supplied synthetic `actor_id`.
 
 ## Responses, errors, pagination
 

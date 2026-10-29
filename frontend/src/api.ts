@@ -88,7 +88,7 @@ export interface UserDashboard {
   recent_donations: Donation[];
   recent_activity: AuditEvent[];
   last_updated: string;
-  data_source: "local_live";
+  data_source: "local_live" | "cloud_live";
 }
 
 export interface ETLRun {
@@ -122,12 +122,16 @@ export interface SystemHealth {
   deployment: string;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE?.trim() ||
+  (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
 const LOCAL_DEMO =
   import.meta.env.DEV &&
   import.meta.env.VITE_AUTH_MODE === "local-demo";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!API_BASE) {
+    throw new Error("VITE_API_BASE is required for a production build.");
+  }
   let response: Response;
   try {
     const accessToken = LOCAL_DEMO ? null : await readAccessToken();
@@ -166,6 +170,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function download(path: string, filename: string): Promise<void> {
+  if (!API_BASE) {
+    throw new Error("VITE_API_BASE is required for a production build.");
+  }
   let response: Response;
   try {
     const accessToken = LOCAL_DEMO ? null : await readAccessToken();

@@ -9,12 +9,12 @@ on:
         type: boolean
         default: false
       deploy_approved:
-        description: I explicitly approve creating the resources in the change set.
+        description: I explicitly approve this change-set operation.
         required: true
         type: boolean
         default: false
       operation:
-        description: Prepare a non-executed change set or execute a previously reviewed one.
+        description: Prepare a non-executed change set or review and execute an existing one.
         required: true
         type: choice
         options:
@@ -22,7 +22,11 @@ on:
           - execute-reviewed-change-set
         default: prepare-change-set
       reviewed_change_set_arn:
-        description: Existing change set ARN (required only for execute-reviewed-change-set).
+        description: Exact change-set ARN from a completed prepare-change-set run.
+        required: false
+        type: string
+      reviewed_commit_sha:
+        description: Full commit SHA shown in the prepared change-set summary.
         required: false
         type: string
       cognito_domain_prefix:
@@ -33,81 +37,676 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sharebite-aws-deployment
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    if: ${{ inputs.cost_reviewed && inputs.deploy_approved && github.ref == 'refs/heads/main' }}
+  prepare:
+    if: ${{ inputs.operation == 'prepare-change-set' && inputs.cost_reviewed && inputs.deploy_approved && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: aws-demo
     permissions:
       contents: read
       id-token: write
-    environment: aws-demo
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      CFN_EXECUTION_ROLE_ARN: ${{ vars.CFN_EXECUTION_ROLE_ARN }}
+      RUNTIME_PERMISSIONS_BOUNDARY_ARN: ${{ vars.RUNTIME_PERMISSIONS_BOUNDARY_ARN }}
+      SAM_ARTIFACT_BUCKET: ${{ vars.SAM_ARTIFACT_BUCKET }}
+      STACK_NAME: smart-food-demo
+      DOMAIN_PREFIX: ${{ inputs.cognito_domain_prefix }}
+      SOURCE_COMMIT: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate deployment inputs
-        env:
-          OPERATION: ${{ inputs.operation }}
-          CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}
-          DOMAIN_PREFIX: ${{ inputs.cognito_domain_prefix }}
-          DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          DEPLOY_REGION: ${{ vars.AWS_REGION }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate required configuration
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           import re
           import sys
 
-          operation = os.environ["OPERATION"]
-          region = os.environ["DEPLOY_REGION"]
-          role = os.environ["DEPLOY_ROLE_ARN"]
-          if not re.fullmatch(r"[a-z]{2}(?:-gov)?-[a-z]+-\d", region):
-              sys.exit("AWS_REGION must be a valid region identifier.")
-          if not re.fullmatch(r"arn:aws(?:-[a-z]+)*:iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+", role):
-              sys.exit("AWS_DEPLOY_ROLE_ARN must be a role ARN.")
-          if operation == "prepare-change-set":
-              domain = os.environ["DOMAIN_PREFIX"]
-              if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", domain):
-                  sys.exit("A valid Cognito domain prefix is required to prepare the stack.")
-          elif operation == "execute-reviewed-change-set":
-              arn = os.environ["CHANGE_SET_ARN"]
-              match = re.fullmatch(
-                  r"arn:aws(?:-[a-z]+)*:cloudformation:([a-z0-9-]+):\d{12}:changeSet/[A-Za-z0-9-]+/[A-Za-z0-9-]+",
-                  arn,
-              )
-              if not match or match.group(1) != region:
-                  sys.exit("Provide a reviewed CloudFormation change-set ARN in AWS_REGION.")
-          else:
-              sys.exit("Unsupported deployment operation.")
+          required = (
+              "AWS_REGION",
+              "AWS_ACCOUNT_ID",
+              "AWS_DEPLOY_ROLE_ARN",
+              "CFN_EXECUTION_ROLE_ARN",
+              "RUNTIME_PERMISSIONS_BOUNDARY_ARN",
+              "SAM_ARTIFACT_BUCKET",
+              "DOMAIN_PREFIX",
+          )
+          missing = [key for key in required if not os.environ.get(key)]
+          if missing:
+              sys.exit(f"Missing required GitHub environment variables or input: {', '.join(missing)}")
+          if os.environ["AWS_REGION"] != "ap-south-1":
+              sys.exit("AWS_REGION must be ap-south-1 for this deployment.")
+          account = os.environ["AWS_ACCOUNT_ID"]
+          if not re.fullmatch(r"\d{12}", account):
+              sys.exit("AWS_ACCOUNT_ID must contain exactly 12 digits.")
+          role_pattern = rf"arn:aws:iam::{account}:role/[A-Za-z0-9+=,.@_/-]+"
+          for name in ("AWS_DEPLOY_ROLE_ARN", "CFN_EXECUTION_ROLE_ARN"):
+              if not re.fullmatch(role_pattern, os.environ[name]):
+                  sys.exit(f"{name} must be an IAM role ARN in AWS_ACCOUNT_ID.")
+          if os.environ["AWS_DEPLOY_ROLE_ARN"] == os.environ["CFN_EXECUTION_ROLE_ARN"]:
+              sys.exit("The GitHub OIDC role and CloudFormation execution role must be distinct.")
+          boundary_pattern = rf"arn:aws:iam::{account}:policy/[A-Za-z0-9+=,.@_/-]+"
+          if not re.fullmatch(boundary_pattern, os.environ["RUNTIME_PERMISSIONS_BOUNDARY_ARN"]):
+              sys.exit("RUNTIME_PERMISSIONS_BOUNDARY_ARN must be an IAM policy ARN in AWS_ACCOUNT_ID.")
+          bucket = os.environ["SAM_ARTIFACT_BUCKET"]
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+              sys.exit("SAM_ARTIFACT_BUCKET must be a valid, pre-created S3 bucket name without dots.")
+          if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", os.environ["DOMAIN_PREFIX"]):
+              sys.exit("Provide a valid lowercase Cognito domain prefix.")
+          if os.environ["STACK_NAME"] != "smart-food-demo":
+              sys.exit("STACK_NAME must be smart-food-demo.")
+          if not re.fullmatch(r"[0-9a-f]{40}", os.environ["SOURCE_COMMIT"]):
+              sys.exit("The workflow source commit must be a full Git SHA.")
           PY
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: aws-actions/setup-sam@v2
-      - name: Build
+      - uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
+      - name: Build SAM application
         run: sam build --template-file template.yaml
-      - name: Configure temporary AWS credentials through OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure temporary AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: smart-food-demo-deploy
-      - name: Review proposed resource changes
-        if: ${{ inputs.operation == 'prepare-change-set' }}
+          role-session-name: sharebite-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify the assumed deployment account
         run: |
-          sam deploy \
-            --config-file /dev/null \
-            --stack-name smart-food-demo \
-            --region "${AWS_REGION}" \
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          expected_role_name="${AWS_DEPLOY_ROLE_ARN##*/}"
+          if [ "$actual_account" != "$AWS_ACCOUNT_ID" ] \
+            || [[ "$actual_arn" != "arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${expected_role_name}/"* ]]; then
+            echo "::error::Credentials are not the expected non-root GitHub deployment role in the target account."
+            exit 1
+          fi
+      - name: Verify artifact bucket region and security settings
+        run: |
+          bucket_region="$(aws s3api get-bucket-location \
+            --bucket "$SAM_ARTIFACT_BUCKET" \
+            --region "$AWS_REGION" \
+            --query LocationConstraint \
+            --output text \
+            --no-cli-pager)"
+          if [ "$bucket_region" != "$AWS_REGION" ]; then
+            echo "::error::SAM_ARTIFACT_BUCKET must be in $AWS_REGION (reported location: $bucket_region)."
+            exit 1
+          fi
+          aws s3api get-public-access-block \
+            --bucket "$SAM_ARTIFACT_BUCKET" \
+            --region "$AWS_REGION" \
+            --query PublicAccessBlockConfiguration \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-artifact-public-access.json
+          aws s3api get-bucket-encryption \
+            --bucket "$SAM_ARTIFACT_BUCKET" \
+            --region "$AWS_REGION" \
+            --query ServerSideEncryptionConfiguration \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-artifact-encryption.json
+          aws s3api get-bucket-ownership-controls \
+            --bucket "$SAM_ARTIFACT_BUCKET" \
+            --region "$AWS_REGION" \
+            --query OwnershipControls \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-artifact-ownership.json
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          public_access = json.loads(Path("/tmp/sharebite-artifact-public-access.json").read_text())
+          encryption = json.loads(Path("/tmp/sharebite-artifact-encryption.json").read_text())
+          ownership = json.loads(Path("/tmp/sharebite-artifact-ownership.json").read_text())
+          block_settings = (
+              "BlockPublicAcls",
+              "IgnorePublicAcls",
+              "BlockPublicPolicy",
+              "RestrictPublicBuckets",
+          )
+          if not all(public_access.get(key) is True for key in block_settings):
+              sys.exit("SAM_ARTIFACT_BUCKET must enable all four S3 Block Public Access settings.")
+          algorithms = {
+              rule.get("ApplyServerSideEncryptionByDefault", {}).get("SSEAlgorithm")
+              for rule in encryption.get("Rules", [])
+          }
+          if "AES256" not in algorithms:
+              sys.exit("SAM_ARTIFACT_BUCKET must have default SSE-S3 (AES256) encryption.")
+          if not any(
+              rule.get("ObjectOwnership") == "BucketOwnerEnforced"
+              for rule in ownership.get("Rules", [])
+          ):
+              sys.exit("SAM_ARTIFACT_BUCKET must use S3 Object Ownership BucketOwnerEnforced.")
+          print("Artifact bucket is in the target region, private, encrypted, and owner-enforced.")
+          PY
+      - name: Select CREATE or UPDATE change-set type
+        id: stack
+        run: |
+          if aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-stack.json 2> /tmp/sharebite-stack-error.txt; then
+            python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/sharebite-stack.json").read_text())
+          stacks = data.get("Stacks", [])
+          if len(stacks) != 1:
+              sys.exit("Expected exactly one stack named smart-food-demo.")
+          stack = stacks[0]
+          expected_id = (
+              f"arn:aws:cloudformation:{os.environ['AWS_REGION']}:"
+              f"{os.environ['AWS_ACCOUNT_ID']}:stack/{os.environ['STACK_NAME']}/"
+          )
+          if stack.get("StackName") != os.environ["STACK_NAME"]:
+              sys.exit("CloudFormation returned an unexpected stack name.")
+          if not str(stack.get("StackId", "")).startswith(expected_id):
+              sys.exit("Existing stack ID does not match the configured account and region.")
+          status = stack.get("StackStatus")
+          if status == "REVIEW_IN_PROGRESS":
+              change_set_type = "CREATE"
+          elif status in {"CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"}:
+              change_set_type = "UPDATE"
+          else:
+              sys.exit(f"Refusing deployment while stack status is {status!r}.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"change_set_type={change_set_type}\n")
+              output.write("stack_file=/tmp/sharebite-stack.json\n")
+          print(f"Verified stack {stack['StackName']} ({status}); using {change_set_type}.")
+          PY
+          else
+            if grep -Fq "ValidationError" /tmp/sharebite-stack-error.txt \
+              && grep -Fqi "does not exist" /tmp/sharebite-stack-error.txt; then
+              echo "No existing stack found; preparing a CREATE change set."
+              echo "change_set_type=CREATE" >> "$GITHUB_OUTPUT"
+              echo "stack_file=" >> "$GITHUB_OUTPUT"
+            else
+              cat /tmp/sharebite-stack-error.txt
+              echo "::error::Could not safely determine whether the target stack exists."
+              exit 1
+            fi
+          fi
+      - name: Package artifacts in the configured bucket
+        run: |
+          sam package \
+            --template-file .aws-sam/build/template.yaml \
+            --s3-bucket "$SAM_ARTIFACT_BUCKET" \
+            --s3-prefix sharebite/artifacts \
+            --region "$AWS_REGION" \
+            --output-template-file /tmp/sharebite-packaged-template.yaml
+      - name: Upload the packaged template
+        id: template
+        run: |
+          key="sharebite/artifacts/packaged-template-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yaml"
+          aws s3 cp /tmp/sharebite-packaged-template.yaml \
+            "s3://${SAM_ARTIFACT_BUCKET}/${key}" \
+            --region "$AWS_REGION" \
+            --sse AES256 \
+            --no-cli-pager
+          echo "template_url=https://${SAM_ARTIFACT_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${key}" >> "$GITHUB_OUTPUT"
+      - name: Create a named, non-executed CloudFormation change set
+        id: create
+        env:
+          CHANGE_SET_TYPE: ${{ steps.stack.outputs.change_set_type }}
+          TEMPLATE_URL: ${{ steps.template.outputs.template_url }}
+        run: |
+          change_set_name="smart-food-demo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          change_set_id="$(aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$change_set_name" \
+            --change-set-type "$CHANGE_SET_TYPE" \
+            --template-url "$TEMPLATE_URL" \
+            --parameters \
+              "ParameterKey=CognitoDomainPrefix,ParameterValue=${DOMAIN_PREFIX}" \
+              "ParameterKey=SourceCommit,ParameterValue=${SOURCE_COMMIT}" \
+              "ParameterKey=RuntimePermissionsBoundaryArn,ParameterValue=${RUNTIME_PERMISSIONS_BOUNDARY_ARN}" \
             --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset \
-            --no-confirm-changeset \
-            --parameter-overrides "CognitoDomainPrefix=${DOMAIN_PREFIX}" \
-            --resolve-s3 \
-            --no-execute-changeset
+            --role-arn "$CFN_EXECUTION_ROLE_ARN" \
+            --tags Key=Project,Value=ShareBite Key=Environment,Value=demo Key=ManagedBy,Value=GitHubActions Key=SourceCommit,Value=${SOURCE_COMMIT} \
+            --region "$AWS_REGION" \
+            --query ChangeSetId \
+            --output text \
+            --no-cli-pager)"
+          if [ -z "$change_set_id" ] || [ "$change_set_id" = "None" ]; then
+            echo "::error::CloudFormation did not return a change-set identifier."
+            exit 1
+          fi
+          echo "change_set_arn=$change_set_id" >> "$GITHUB_OUTPUT"
+          echo "Created non-executed change set: $change_set_id"
+      - name: Wait for change-set creation and summarize proposed changes
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          DOMAIN_PREFIX: ${{ inputs.cognito_domain_prefix }}
-      - name: Execute reviewed change set
-        if: ${{ inputs.operation == 'execute-reviewed-change-set' }}
-        run: aws cloudformation execute-change-set --change-set-name "${CHANGE_SET_ARN}" --stack-name smart-food-demo
+          CHANGE_SET_ARN: ${{ steps.create.outputs.change_set_arn }}
+          EXPECTED_CHANGE_SET_TYPE: ${{ steps.stack.outputs.change_set_type }}
+          EXISTING_STACK_FILE: ${{ steps.stack.outputs.stack_file }}
+        run: |
+          if ! aws cloudformation wait change-set-create-complete \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --region "$AWS_REGION" \
+            --no-cli-pager; then
+            aws cloudformation describe-change-set \
+              --change-set-name "$CHANGE_SET_ARN" \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --output json \
+              --no-cli-pager > /tmp/sharebite-change-set.json
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          change_set = json.loads(Path("/tmp/sharebite-change-set.json").read_text())
+          print(f"Change-set status: {change_set.get('Status')}")
+          print(f"Status reason: {change_set.get('StatusReason', 'No reason returned')}")
+          PY
+            echo "::error::Change-set creation did not complete; it was not executed."
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-change-set.json
+          stack_args=()
+          if [ -n "$EXISTING_STACK_FILE" ]; then
+            stack_args=(--stack-file "$EXISTING_STACK_FILE")
+          fi
+          python3 scripts/verify_change_set.py \
+            --change-set-file /tmp/sharebite-change-set.json \
+            "${stack_args[@]}" \
+            --expected-change-set-arn "$CHANGE_SET_ARN" \
+            --expected-account "$AWS_ACCOUNT_ID" \
+            --expected-region "$AWS_REGION" \
+            --expected-stack "$STACK_NAME" \
+            --expected-type "$EXPECTED_CHANGE_SET_TYPE" \
+            --expected-source-commit "$SOURCE_COMMIT"
+
+  review:
+    if: ${{ inputs.operation == 'execute-reviewed-change-set' && inputs.cost_reviewed && inputs.deploy_approved && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: aws-demo-review
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REVIEW_ROLE_ARN: ${{ vars.AWS_REVIEW_ROLE_ARN }}
+      STACK_NAME: smart-food-demo
+      CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}
+      SOURCE_COMMIT: ${{ inputs.reviewed_commit_sha }}
+    steps:
+      - name: Validate reviewed commit input
+        run: |
+          if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Provide the full commit SHA shown by the prepare run."
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.reviewed_commit_sha }}
+          fetch-depth: 0
+      - name: Confirm reviewed commit is on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main; then
+            echo "::error::The reviewed source commit is not reachable from main."
+            exit 1
+          fi
+      - name: Validate review configuration and exact change-set ARN
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          account = os.environ.get("AWS_ACCOUNT_ID", "")
+          region = os.environ.get("AWS_REGION", "")
+          role = os.environ.get("AWS_REVIEW_ROLE_ARN", "")
+          change_set = os.environ.get("CHANGE_SET_ARN", "")
+          if not account or not region or not role or not change_set:
+              sys.exit("AWS_ACCOUNT_ID, AWS_REGION, AWS_REVIEW_ROLE_ARN, and the change-set ARN are required.")
+          if region != "ap-south-1" or not re.fullmatch(r"\d{12}", account):
+              sys.exit("Review configuration must target the configured AWS account in ap-south-1.")
+          if not re.fullmatch(rf"arn:aws:iam::{account}:role/[A-Za-z0-9+=,.@_/-]+", role):
+              sys.exit("AWS_REVIEW_ROLE_ARN must be an IAM role ARN in AWS_ACCOUNT_ID.")
+          if not re.fullmatch(
+              rf"arn:aws:cloudformation:{region}:{account}:changeSet/smart-food-demo-\d+-\d+/[A-Za-z0-9-]+",
+              change_set,
+          ):
+              sys.exit("Provide the exact smart-food-demo change-set ARN from a prepare run.")
+          if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get("SOURCE_COMMIT", "")):
+              sys.exit("Provide the full reviewed commit SHA from a prepare run.")
+          PY
+      - name: Configure read-only temporary AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_REVIEW_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: sharebite-review-${{ github.run_id }}
+      - name: Fetch the exact change set for identity review
+        run: |
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          expected_role_name="${AWS_REVIEW_ROLE_ARN##*/}"
+          if [ "$actual_account" != "$AWS_ACCOUNT_ID" ] \
+            || [[ "$actual_arn" != "arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${expected_role_name}/"* ]]; then
+            echo "::error::Credentials are not the expected non-root GitHub review role in the target account."
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-change-set.json
+      - name: Check current stack identity and status
+        run: |
+          if aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-stack.json 2> /tmp/sharebite-stack-error.txt; then
+            export SHAREBITE_STACK_FILE=/tmp/sharebite-stack.json
+          elif grep -Fq "ValidationError" /tmp/sharebite-stack-error.txt \
+            && grep -Fqi "does not exist" /tmp/sharebite-stack-error.txt; then
+            export SHAREBITE_STACK_FILE=""
+          else
+            cat /tmp/sharebite-stack-error.txt
+            echo "::error::Could not safely verify the current stack."
+            exit 1
+          fi
+          stack_args=()
+          if [ -n "$SHAREBITE_STACK_FILE" ]; then
+            stack_args=(--stack-file "$SHAREBITE_STACK_FILE")
+          fi
+          python3 scripts/verify_change_set.py \
+            --change-set-file /tmp/sharebite-change-set.json \
+            "${stack_args[@]}" \
+            --expected-change-set-arn "$CHANGE_SET_ARN" \
+            --expected-account "$AWS_ACCOUNT_ID" \
+            --expected-region "$AWS_REGION" \
+            --expected-stack "$STACK_NAME" \
+            --expected-source-commit "$SOURCE_COMMIT"
+
+  execute:
+    needs: review
+    if: ${{ needs.review.result == 'success' && inputs.operation == 'execute-reviewed-change-set' && inputs.cost_reviewed && inputs.deploy_approved && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: aws-demo
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      STACK_NAME: smart-food-demo
+      CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}
+      SOURCE_COMMIT: ${{ inputs.reviewed_commit_sha }}
+    steps:
+      - name: Validate reviewed commit input
+        run: |
+          if ! [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Provide the full commit SHA shown by the prepare run."
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.reviewed_commit_sha }}
+          fetch-depth: 0
+      - name: Confirm reviewed commit is on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main; then
+            echo "::error::The reviewed source commit is not reachable from main."
+            exit 1
+          fi
+      - name: Validate protected execution configuration
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          account = os.environ.get("AWS_ACCOUNT_ID", "")
+          region = os.environ.get("AWS_REGION", "")
+          role = os.environ.get("AWS_DEPLOY_ROLE_ARN", "")
+          change_set = os.environ.get("CHANGE_SET_ARN", "")
+          if not account or not region or not role or not change_set:
+              sys.exit("AWS_ACCOUNT_ID, AWS_REGION, AWS_DEPLOY_ROLE_ARN, and the change-set ARN are required.")
+          if region != "ap-south-1" or not re.fullmatch(r"\d{12}", account):
+              sys.exit("Execution configuration must target the configured AWS account in ap-south-1.")
+          if not re.fullmatch(rf"arn:aws:iam::{account}:role/[A-Za-z0-9+=,.@_/-]+", role):
+              sys.exit("AWS_DEPLOY_ROLE_ARN must be an IAM role ARN in AWS_ACCOUNT_ID.")
+          if not re.fullmatch(
+              rf"arn:aws:cloudformation:{region}:{account}:changeSet/smart-food-demo-\d+-\d+/[A-Za-z0-9-]+",
+              change_set,
+          ):
+              sys.exit("Provide the exact smart-food-demo change-set ARN from a prepare run.")
+          PY
+      - name: Configure temporary AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: sharebite-execute-${{ github.run_id }}
+      - name: Re-verify the exact change set and stack after environment approval
+        run: |
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          expected_role_name="${AWS_DEPLOY_ROLE_ARN##*/}"
+          if [ "$actual_account" != "$AWS_ACCOUNT_ID" ] \
+            || [[ "$actual_arn" != "arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/${expected_role_name}/"* ]]; then
+            echo "::error::Credentials are not the expected non-root GitHub deployment role in the target account."
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-change-set.json
+          if aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-stack.json 2> /tmp/sharebite-stack-error.txt; then
+            export SHAREBITE_STACK_FILE=/tmp/sharebite-stack.json
+          elif grep -Fq "ValidationError" /tmp/sharebite-stack-error.txt \
+            && grep -Fqi "does not exist" /tmp/sharebite-stack-error.txt; then
+            export SHAREBITE_STACK_FILE=""
+          else
+            cat /tmp/sharebite-stack-error.txt
+            echo "::error::Could not safely verify the current stack."
+            exit 1
+          fi
+          stack_args=()
+          if [ -n "$SHAREBITE_STACK_FILE" ]; then
+            stack_args=(--stack-file "$SHAREBITE_STACK_FILE")
+          fi
+          python3 scripts/verify_change_set.py \
+            --change-set-file /tmp/sharebite-change-set.json \
+            "${stack_args[@]}" \
+            --expected-change-set-arn "$CHANGE_SET_ARN" \
+            --expected-account "$AWS_ACCOUNT_ID" \
+            --expected-region "$AWS_REGION" \
+            --expected-stack "$STACK_NAME" \
+            --expected-source-commit "$SOURCE_COMMIT"
+      - name: Execute only the reviewed change set
+        run: |
+          aws cloudformation execute-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --no-cli-pager
+      - name: Wait for the reviewed stack operation
+        run: |
+          change_set_type="$(python3 -c 'import json; print(json.load(open("/tmp/sharebite-change-set.json"))["ChangeSetType"])')"
+          case "$change_set_type" in
+            CREATE) waiter=stack-create-complete ;;
+            UPDATE) waiter=stack-update-complete ;;
+            *) echo "::error::Unexpected change-set type: $change_set_type"; exit 1 ;;
+          esac
+          aws cloudformation wait "$waiter" \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --no-cli-pager
+      - name: Enable CloudFormation termination protection
+        run: |
+          aws cloudformation update-termination-protection \
+            --enable-termination-protection \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --no-cli-pager
+      - name: Read deployed outputs
+        id: outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager > /tmp/sharebite-deployed-stack.json
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/sharebite-deployed-stack.json").read_text())
+          stacks = data.get("Stacks", [])
+          if len(stacks) != 1 or stacks[0].get("StackStatus") not in {"CREATE_COMPLETE", "UPDATE_COMPLETE"}:
+              sys.exit("The deployed stack is not in a successful stable status.")
+          outputs = {item["OutputKey"]: item["OutputValue"] for item in stacks[0].get("Outputs", [])}
+          required = (
+              "ApiBaseUrl",
+              "FrontendUrl",
+              "FrontendBucketName",
+              "FrontendDistributionId",
+              "DonationsTableName",
+              "AnalyticsBucketName",
+              "LambdaFunctionName",
+              "ETLFunctionName",
+              "CognitoUserPoolId",
+              "CognitoAppClientId",
+              "CognitoIssuer",
+              "CognitoHostedUi",
+          )
+          missing = [key for key in required if not outputs.get(key)]
+          if missing:
+              sys.exit(f"Missing deployment outputs: {', '.join(missing)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key in required:
+                  output.write(f"{key}={outputs[key]}\n")
+          PY
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build production frontend against deployed outputs
+        working-directory: frontend
         env:
-          CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}
+          VITE_AUTH_MODE: cognito
+          VITE_API_BASE: ${{ steps.outputs.outputs.ApiBaseUrl }}
+          VITE_COGNITO_ISSUER: ${{ steps.outputs.outputs.CognitoIssuer }}
+          VITE_COGNITO_CLIENT_ID: ${{ steps.outputs.outputs.CognitoAppClientId }}
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Upload frontend and invalidate CloudFront
+        env:
+          FRONTEND_BUCKET: ${{ steps.outputs.outputs.FrontendBucketName }}
+          DISTRIBUTION_ID: ${{ steps.outputs.outputs.FrontendDistributionId }}
+        run: |
+          aws s3 sync frontend/dist "s3://${FRONTEND_BUCKET}/" \
+            --region "$AWS_REGION" \
+            --sse AES256 \
+            --cache-control "no-cache,max-age=0,must-revalidate" \
+            --no-cli-pager
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*" \
+            --no-cli-pager > /tmp/sharebite-invalidation.json
+          cat /tmp/sharebite-invalidation.json
+          invalidation_id="$(python3 -c 'import json; print(json.load(open("/tmp/sharebite-invalidation.json"))["Invalidation"]["Id"])')"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --id "$invalidation_id" \
+            --no-cli-pager
+      - name: Smoke-test public frontend and API
+        env:
+          FRONTEND_URL: ${{ steps.outputs.outputs.FrontendUrl }}
+          API_BASE_URL: ${{ steps.outputs.outputs.ApiBaseUrl }}
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-delay 10 --retry-connrefused \
+            "$FRONTEND_URL/" -o /tmp/sharebite-index.html
+          grep -q '<div id="root"' /tmp/sharebite-index.html
+          curl --fail --silent --show-error \
+            --dump-header /tmp/sharebite-api-headers.txt \
+            --header "Origin: $FRONTEND_URL" \
+            "$API_BASE_URL/api/health" -o /tmp/sharebite-health.json
+          if ! grep -Fqi "access-control-allow-origin: ${FRONTEND_URL}" /tmp/sharebite-api-headers.txt; then
+            echo "::error::API CORS did not allow the deployed frontend origin."
+            cat /tmp/sharebite-api-headers.txt
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          health = json.loads(Path("/tmp/sharebite-health.json").read_text())
+          if health.get("status") != "ok" or health.get("mode") != "aws":
+              raise SystemExit("API health response was not successful.")
+          print(f"API health: {health}")
+          PY
+      - name: Publish deployment summary
+        env:
+          FRONTEND_URL: ${{ steps.outputs.outputs.FrontendUrl }}
+          API_BASE_URL: ${{ steps.outputs.outputs.ApiBaseUrl }}
+          FRONTEND_BUCKET: ${{ steps.outputs.outputs.FrontendBucketName }}
+          FRONTEND_DISTRIBUTION: ${{ steps.outputs.outputs.FrontendDistributionId }}
+          DONATIONS_TABLE: ${{ steps.outputs.outputs.DonationsTableName }}
+          ANALYTICS_BUCKET: ${{ steps.outputs.outputs.AnalyticsBucketName }}
+          API_FUNCTION: ${{ steps.outputs.outputs.LambdaFunctionName }}
+          ETL_FUNCTION: ${{ steps.outputs.outputs.ETLFunctionName }}
+          USER_POOL: ${{ steps.outputs.outputs.CognitoUserPoolId }}
+          COGNITO_CLIENT: ${{ steps.outputs.outputs.CognitoAppClientId }}
+          COGNITO_ISSUER: ${{ steps.outputs.outputs.CognitoIssuer }}
+          COGNITO_HOSTED_UI: ${{ steps.outputs.outputs.CognitoHostedUi }}
+        run: |
+          {
+            echo "## ShareBite deployment"
+            echo
+            echo "- Stack: \`$STACK_NAME\`"
+            echo "- Region: \`$AWS_REGION\`"
+            echo "- Source commit: \`$SOURCE_COMMIT\`"
+            echo "- Workflow run: \`$GITHUB_RUN_ID\`"
+            echo "- Frontend: $FRONTEND_URL"
+            echo "- API base: $API_BASE_URL"
+            echo "- Frontend S3 bucket: \`$FRONTEND_BUCKET\`"
+            echo "- CloudFront distribution: \`$FRONTEND_DISTRIBUTION\`"
+            echo "- Donations DynamoDB table: \`$DONATIONS_TABLE\`"
+            echo "- Analytics S3 bucket: \`$ANALYTICS_BUCKET\`"
+            echo "- API Lambda: \`$API_FUNCTION\`"
+            echo "- ETL Lambda: \`$ETL_FUNCTION\`"
+            echo "- Cognito user pool: \`$USER_POOL\`"
+            echo "- Cognito app client: \`$COGNITO_CLIENT\`"
+            echo "- Cognito issuer: $COGNITO_ISSUER"
+            echo "- Cognito hosted UI: $COGNITO_HOSTED_UI"
+            echo "- Stack status: \`CREATE_COMPLETE/UPDATE_COMPLETE\` (waiter succeeded)"
+          } >> "$GITHUB_STEP_SUMMARY"

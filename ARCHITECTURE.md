@@ -2,7 +2,7 @@
 
 ## Design and operating modes
 
-This is a local-first teaching application. The local baseline uses synthetic demo identities, FastAPI, SQLite, React, and Pandas; it does not require AWS credentials. The optional AWS target is configuration and mocked code only. No account was accessed and no resources were deployed.
+This is a local-first teaching application. The local baseline uses synthetic demo identities, FastAPI, SQLite, React, and Pandas; it does not require AWS credentials. The AWS target is implemented in SAM and has been reviewed with local tests and template tooling, but it is not deployed. A read-only check on 2026-10-29 verified the configured non-root IAM Identity Center role and found no CloudFormation stacks, Lambda functions, or DynamoDB tables in `ap-south-1`. The only listed S3 bucket is `smartslot-datalake`, which is unrelated and must not be used or modified.
 
 ### Local baseline
 
@@ -21,25 +21,31 @@ flowchart LR
 
 Local demo profiles are fixed, predictable identities and are not authentication. They are enabled only by `APP_MODE=local-demo` and `VITE_AUTH_MODE=local-demo` during Vite development. Do not enter real personal or sensitive data. SQLite startup migrations add missing fields/tables and preserve existing donation rows.
 
-### Optional AWS target (not deployed)
+### AWS target (implemented in the template, not deployed)
 
 ```mermaid
 flowchart LR
-  User[Browser on approved local origin] -->|Authorization Code + PKCE| Cognito[Amazon Cognito User Pool]
+  User[Browser on either laptop] -->|HTTPS| CDN[CloudFront]
+  CDN -->|Origin Access Control| Frontend[Private frontend S3 bucket]
+  User -->|Authorization Code + PKCE| Cognito[Amazon Cognito User Pool]
   User -->|Bearer JWT| API[Amazon API Gateway HTTP API]
   API -->|JWT signature, issuer, audience validation| Lambda[AWS Lambda API adapter]
   Lambda -->|Conditional writes and transactions| DynamoDB[Amazon DynamoDB single table]
   Lambda -->|Structured application logs| CW[Amazon CloudWatch Logs]
-  ETL[Local Pandas ETL] -->|explicit approved upload only| S3[Private Amazon S3 bucket]
+  Operator[Authorized manual invocation] --> ETL[AWS ETL Lambda + Pandas]
+  ETL -->|Bounded scan| DynamoDB
+  ETL -->|Run-scoped reports| Analytics[Private analytics S3 bucket]
   Role[IAM Lambda execution role] -. scoped actions .-> Lambda
   Template[AWS SAM / CloudFormation] -. defines resources .-> Cognito
+  Template -.-> CDN
   Template -.-> API
   Template -.-> Lambda
   Template -.-> DynamoDB
-  Template -.-> S3
+  Template -.-> Frontend
+  Template -.-> Analytics
 ```
 
-This diagram describes a prepared target, not a successful deployment or a zero-cost recommendation. Account-plan eligibility, region, credits, allowances, current pricing, and actual service behavior are unverified. Frontend hosting/CDN is not included; callback/CORS origins are local development addresses.
+The diagram describes the actual template and source flow, not a successful deployment or a zero-cost recommendation. The frontend S3 origin is private behind CloudFront OAC; the browser never receives AWS credentials. Cognito authorizes the API with JWTs. The separate manually invoked ETL Lambda reads bounded records from DynamoDB and writes run-scoped reports to the private analytics bucket. No ETL schedule is configured. Account-plan eligibility, credits, allowances, pricing, and live service behavior remain unverified. The template permits local development callback/CORS origins as well as the generated CloudFront domain.
 
 ## AWS service responsibilities and boundaries
 
@@ -49,10 +55,11 @@ This diagram describes a prepared target, not a successful deployment or a zero-
 | Amazon API Gateway HTTP API | Verify bearer JWT signature, issuer, and app-client audience before Lambda | Template only; no live tokens or requests tested. |
 | AWS Lambda | Validate API payloads, derive actor from verified `sub`/group claims, call repository | Adapter and repository are mock-tested, not live-integrated. |
 | Amazon DynamoDB | Store donations and audit events; conditional state transitions and atomic donation/event transactions | One table with five GSIs: `status-index`, `donor-index`, `recipient-index`, `entity-index`, and `expiry-index` (deadline-ordered due listings). User profile management is not cloud-backed. Administrative analytics and list export stop at 500 donations. |
-| Amazon S3 | Private optional ETL report storage | No bucket or upload exists. Local upload requires explicit `--upload-s3` and an already-existing bucket; a multi-object upload may partially succeed. |
+| Amazon S3 | Separate private frontend origin and ETL report storage | Both buckets are template resources with public access blocked, encryption, and ownership controls. Neither has been created. The local ETL upload path remains explicit and separate from the cloud ETL Lambda. |
+| Amazon CloudFront | HTTPS delivery of the static frontend from the private S3 origin using OAC | Distribution is defined by the template; no live URL or distribution has been verified. Requests, transfer, and invalidations can incur charges. |
 | AWS IAM | Scope Lambda to table item actions, five index queries, and bounded log writes | Template policy only. The future GitHub OIDC deployment role is not created/configured. |
 | Amazon CloudWatch | Store Lambda logs with configured 7-day retention | No live logs, metrics, or alarms. Log ingestion and storage may incur charges. |
-| AWS SAM / CloudFormation | Define the optional stack and outputs | Template linted locally; SAM CLI validation unavailable. A SAM deploy can use/create a separate artifact bucket. |
+| AWS SAM / CloudFormation | Define the stack and outputs, including frontend, API, Cognito, and ETL resources | Template validation/build have passed locally. No stack or change set exists. The workflow requires a separately approved, pre-created artifact bucket and will not use `--resolve-s3`. |
 | Amazon SNS / EventBridge | Notifications and scheduled processing | Not selected. Expiry is manually invoked and bounded; no schedule or notifications configured. |
 | AWS Glue / Athena | Possible managed ETL/query extension | Not included; local Pandas remains the baseline. |
 

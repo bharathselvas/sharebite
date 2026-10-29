@@ -14,21 +14,23 @@ A local-first food redistribution and analytics product for a college cloud-comp
 - **FastAPI backend:** additive SQLite migrations, role/status checks for fixed synthetic profiles, donation creation/edit-before-claim, atomic claims, pickup/cancellation/expiry, participant-scoped history, admin user status controls, analytics, pagination, and JSON export.
 - **Optional cloud backend:** DynamoDB conditional updates and transactions that record donation audit events atomically; status/donor/recipient/event/deadline indexes; Cognito JWT authorizer; Lambda derives identity and role only from validated claims.
 - **Pandas ETL:** bounded CSV/JSON ingestion, timestamp/type/state validation, duplicate rejection, minimized rejection details, unit-separated summaries, daily/status aggregates, and run metadata.
-- **AWS target:** SAM template for Cognito, a Cognito-JWT-protected API Gateway HTTP API, Lambda, DynamoDB, private S3 analytics bucket, scoped IAM permissions, and bounded CloudWatch log retention.
-- **Automation:** GitHub CI tests/build/template checks; separate manually gated, two-step AWS workflow using OIDC. Neither workflow has been run against AWS here.
+- **AWS target:** SAM template for Cognito, a Cognito-JWT-protected API Gateway HTTP API, DynamoDB, bounded API and Pandas ETL Lambdas, private analytics/frontend S3 buckets, CloudFront HTTPS hosting, runtime permissions boundaries, and bounded CloudWatch log retention.
+- **Automation:** GitHub CI tests/build/template checks; separate manually gated, review/execute AWS workflow using OIDC, followed by frontend upload and smoke checks. AWS deployment has not been run.
 
 ## Local mode and deployment boundaries
 
 - Local accounts are **not authentication**. The account switcher is enabled only with `VITE_AUTH_MODE=local-demo` in Vite development mode and `APP_MODE=local-demo` with `DONATION_STORE=sqlite` for FastAPI; use synthetic users/data only.
 - SQLite is a local development store. The optional target Lambda adapter uses DynamoDB condition expressions for competing claims.
-- The AWS frontend auth client uses OIDC authorization code + PKCE. API Gateway validates Cognito access tokens before Lambda; Lambda maps only the Cognito `sub` and assigned `cognito:groups` claims to roles. No cloud account is configured here.
+- The AWS frontend auth client uses OIDC authorization code + PKCE. API Gateway validates Cognito access tokens before Lambda; Lambda maps only the Cognito `sub` and assigned `cognito:groups` claims to roles. Authenticated cloud views refresh every eight seconds while visible. Production frontend builds require explicit HTTPS API and Cognito configuration; no cloud application identity is built into the frontend.
 - No AWS resource is deployed, no AWS Console screenshot or resource ID is available, and no live AWS behavior has been verified.
-- The AWS template defines API, Lambda, DynamoDB table and five GSIs, S3, IAM, CloudWatch, Cognito User Pool/client/groups, and a managed-login domain. These are configuration only; none has been deployed. Account-plan eligibility and current costs are not verified.
+- The AWS template defines API, API Lambda, ETL Lambda, DynamoDB table and five GSIs, private analytics/frontend S3, CloudFront, IAM roles with a required pre-created runtime permissions boundary, CloudWatch, Cognito User Pool/client/groups, and a managed-login domain. These are configuration only; none has been deployed. Account-plan eligibility and current costs are not verified.
 - The deadline GSI lets bounded cloud expiry processing select due listings without repeatedly paging unrelated available donations; its storage/write costs are included in the review.
 - The DynamoDB repository's donation/audit writes are transactionally coupled. Administrative aggregation reads are bounded to 500 records; this and the three role groups are teaching-scale design, not production user administration.
 - Self-registration through the Cognito managed-login flow is a prepared design only; new users have no application role until an administrator assigns exactly one group. AWS-side list/suspend/reactivate user workflows are not implemented in the Lambda adapter. Local profile suspension is a demo-only SQLite feature.
 - Audit events are application records, not an immutable or legally certified ledger. SQLite administrators with file access can alter the database.
 - SNS, EventBridge, Glue, and Athena are not selected or provisioned.
+
+See the [live demonstration runbook](./docs/DEMO_RUNBOOK.md) for two-laptop instructions, AWS ETL invocation, GitHub gates, troubleshooting, and cleanup. It contains placeholders rather than fabricated deployment results.
 
 ## Local setup
 
@@ -140,6 +142,7 @@ GitHub Actions runs comparable backend, ETL, frontend, and infrastructure valida
 - [Project plan](./PROJECT_PLAN.md)
 - [Implementation status and verification log](./IMPLEMENTATION_STATUS.md)
 - [AWS Console and deployment guide](./docs/AWS_CONSOLE_GUIDE.md)
+- [AWS bootstrap and read-only preflight guide](./docs/AWS_BOOTSTRAP_GUIDE.md)
 - [CI/CD walkthrough](./docs/CICD_GUIDE.md)
 - [College report outline](./docs/PROJECT_REPORT_OUTLINE.md)
 - [AWS deployment readiness report](./AWS_READINESS_REPORT.md)

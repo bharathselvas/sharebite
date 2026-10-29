@@ -21,6 +21,7 @@ frontend/.vite/
 !**/.env.example
 .aws/
 .aws-sam/
+/.sharebite-bootstrap-plan/
 *.pem
 *.key
 *.p12

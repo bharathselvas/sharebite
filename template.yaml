@@ -21,6 +21,16 @@ Parameters:
     MaxLength: 63
     AllowedPattern: "^[a-z0-9-]+$"
     Description: Globally unique Cognito managed-login domain prefix; deployment requires availability and cost review.
+  SourceCommit:
+    Type: String
+    MinLength: 40
+    MaxLength: 40
+    AllowedPattern: "^[0-9a-f]{40}$"
+    Description: Git commit used to prepare this reviewed change set.
+  RuntimePermissionsBoundaryArn:
+    Type: String
+    AllowedPattern: "^arn:aws:iam::[0-9]{12}:policy/[A-Za-z0-9+=,.@_/-]+$"
+    Description: Pre-created permissions boundary applied to both Lambda runtime roles.
 
 Globals:
   Function:
@@ -32,6 +42,8 @@ Globals:
 Resources:
   DonationsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub "${ProjectName}-donations"
       BillingMode: PAY_PER_REQUEST
@@ -107,6 +119,8 @@ Resources:
 
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       UserPoolName: !Sub "${ProjectName}-users"
       UsernameConfiguration:
@@ -148,9 +162,11 @@ Resources:
       CallbackURLs:
         - http://127.0.0.1:5173/auth/callback
         - http://localhost:5173/auth/callback
+        - !Sub "https://${FrontendDistribution.DomainName}/auth/callback"
       LogoutURLs:
         - http://127.0.0.1:5173/
         - http://localhost:5173/
+        - !Sub "https://${FrontendDistribution.DomainName}/"
       SupportedIdentityProviders:
         - COGNITO
       AccessTokenValidity: 60
@@ -190,7 +206,10 @@ Resources:
 
   AnalyticsBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      BucketName: !Sub "sharebite-${AWS::AccountId}-${AWS::Region}-analytics"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -209,6 +228,98 @@ Resources:
             Status: Enabled
             ExpirationInDays: 30
 
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "sharebite-${AWS::AccountId}-${AWS::Region}-frontend"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${ProjectName}-frontend-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${ProjectName} HTTPS frontend"
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+        Origins:
+          - Id: ShareBiteFrontendOrigin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: ShareBiteFrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          Compress: true
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        IPV6Enabled: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}"
+
   DonationsApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -226,6 +337,7 @@ Resources:
         AllowOrigins:
           - http://localhost:5173
           - http://127.0.0.1:5173
+          - !Sub "https://${FrontendDistribution.DomainName}"
         AllowHeaders:
           - content-type
           - authorization
@@ -238,6 +350,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${ProjectName}-lambda-role"
+      PermissionsBoundary: !Ref RuntimePermissionsBoundaryArn
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -303,10 +416,75 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${ProjectName}-api"
       RetentionInDays: 7
 
+  ETLExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-etl-role"
+      PermissionsBoundary: !Ref RuntimePermissionsBoundaryArn
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: donations-read-analytics-write-and-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadDonationRecords
+                Effect: Allow
+                Action: dynamodb:Scan
+                Resource: !GetAtt DonationsTable.Arn
+              - Sid: WriteRunScopedReports
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${AnalyticsBucket.Arn}/etl/*"
+              - Sid: WriteETLLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-etl:*"
+
+  ETLFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "${ProjectName}-etl"
+      CodeUri: etl/
+      Handler: aws_handler.handler
+      Runtime: python3.12
+      Timeout: 120
+      MemorySize: 1024
+      Role: !GetAtt ETLExecutionRole.Arn
+      Description: Reads bounded donation data, runs Pandas ETL, and writes private S3 reports.
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+
+  ETLLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-etl"
+      RetentionInDays: 7
+
 Outputs:
   ApiBaseUrl:
     Description: HTTPS API base URL (no AWS deployment has been performed by this project).
     Value: !Sub "https://${DonationsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${StageName}"
+  FrontendUrl:
+    Description: HTTPS frontend URL served by CloudFront from a private S3 origin.
+    Value: !Sub "https://${FrontendDistribution.DomainName}"
+  FrontendDistributionId:
+    Description: CloudFront distribution identifier for invalidation and verification.
+    Value: !Ref FrontendDistribution
+  FrontendBucketName:
+    Description: Private S3 bucket containing the static frontend build.
+    Value: !Ref FrontendBucket
   DonationsTableName:
     Description: DynamoDB table name.
     Value: !Ref DonationsTable
@@ -316,6 +494,9 @@ Outputs:
   LambdaFunctionName:
     Description: Donation API function name.
     Value: !Ref DonationsFunction
+  ETLFunctionName:
+    Description: Manually invoked Lambda that processes DynamoDB records and writes S3 reports.
+    Value: !Ref ETLFunction
   LambdaExecutionRoleName:
     Description: Scoped Lambda execution role name.
     Value: !Ref LambdaExecutionRole

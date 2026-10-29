@@ -49,7 +49,7 @@ Lifecycle: `available -> claimed -> picked_up`. An available listing can instead
 - Average time to claim averages timezone-aware, non-negative `claimed_at - created_at` values; invalid timestamp pairs are excluded.
 - Timestamps and daily grouping use UTC. Local admin counts are fixed synthetic profiles. Cloud user counts are unavailable.
 
-Role-specific donor and recipient dashboard counts are computed by the local API and scoped to the current account; marketplace availability is global. The cloud adapter currently has no role-specific dashboard summary route, so those local summary panels are not evidence of cloud dashboard functionality.
+Role-specific donor and recipient dashboard counts are computed by the API and scoped to the current account; marketplace availability is global. In cloud mode the API derives account identity from the authenticated Cognito token and uses bounded DynamoDB index queries. Dashboard aggregation returns an unavailable response if a query exceeds the 500-record safety bound.
 
 These are application metrics, not proof of food waste prevented or an environmental impact estimate. Read [ARCHITECTURE.md](../ARCHITECTURE.md) for formulas and bounds.
 

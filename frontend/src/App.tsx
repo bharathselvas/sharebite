@@ -334,7 +334,7 @@ function App() {
     try {
       const [currentPage, userDashboard] = await Promise.all([
         api.listDonations(identity.role, identity.id, statusFilter),
-        localDemoEnabled && identity.role !== "admin"
+        identity.role !== "admin"
           ? api.dashboard(identity.id)
           : Promise.resolve(null),
       ]);
@@ -408,6 +408,14 @@ function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!identity || localDemoEnabled) return;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 8_000);
+    return () => window.clearInterval(interval);
+  }, [identity, refresh]);
 
   useEffect(() => {
     if (!confirmation) return;

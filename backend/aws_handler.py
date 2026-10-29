@@ -104,6 +104,22 @@ def handle(event: dict, repository) -> dict:
     if principal is None:
         return respond(401, {"detail": "A valid Cognito JWT with an application group is required"})
 
+    if method == "GET" and path == "/api/me/dashboard":
+        if principal.role not in {"donor", "ngo"}:
+            return respond(403, {"detail": "Donor or NGO permission required"})
+        try:
+            return respond(
+                200, repository.dashboard_for_user(principal.subject, principal.role)
+            )
+        except (RuntimeError, ClientError) as error:
+            code = (
+                error.response.get("Error", {}).get("Code", "Unknown")
+                if isinstance(error, ClientError)
+                else "configured query bound exceeded"
+            )
+            logger.error("User dashboard query failed (%s)", code)
+            return respond(503, {"detail": "Dashboard data is temporarily unavailable"})
+
     if method == "GET" and path in {"/api/donations", "/api/donations/page"}:
         if principal.role not in {"donor", "ngo", "admin"}:
             return respond(403, {"detail": "Donation-list permission required"})

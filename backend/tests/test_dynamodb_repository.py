@@ -278,6 +278,47 @@ def test_dynamo_create_and_paginated_status_and_owner_queries(repository):
     ]
 
 
+def test_dashboard_aggregates_account_scoped_dynamodb_data():
+    repository = DynamoDBDonationRepository(FakeDynamoTable())
+    rice = repository.create(donation())
+    milk = repository.create(
+        donation(food_name="Milk", unit="litres", quantity=Decimal("3"))
+    )
+    repository.create(donation(donor_id="another-donor", food_name="Bread"))
+    repository.claim(rice["id"], "ngo-sub-1")
+    repository.transition(rice["id"], "picked_up", "ngo-sub-1", "ngo")
+
+    donor_dashboard = repository.dashboard_for_user("donor-sub-1", "donor")
+    assert donor_dashboard["total_donations"] == 2
+    assert donor_dashboard["available_donations"] == 1
+    assert donor_dashboard["marketplace_available_donations"] == 2
+    assert donor_dashboard["completed_pickups"] == 1
+    assert donor_dashboard["completed_quantity_by_unit"] == {"bags": Decimal("12")}
+    assert donor_dashboard["recent_donations"][0]["id"] == milk["id"]
+    assert {
+        event["event_type"] for event in donor_dashboard["recent_activity"]
+    } == {
+        "donation_created",
+        "donation_claimed",
+        "donation_completed",
+    }
+
+    ngo_dashboard = repository.dashboard_for_user("ngo-sub-1", "ngo")
+    assert ngo_dashboard["total_donations"] == 1
+    assert ngo_dashboard["completed_pickups"] == 1
+    assert ngo_dashboard["upcoming_pickups"] == []
+    assert ngo_dashboard["data_source"] == "cloud_live"
+
+
+def test_dashboard_fails_closed_when_account_query_exceeds_bound():
+    repository = DynamoDBDonationRepository(FakeDynamoTable(), max_admin_items=1)
+    repository.create(donation())
+    repository.create(donation(food_name="Second donation"))
+
+    with pytest.raises(RuntimeError, match="dashboard query exceeded"):
+        repository.dashboard_for_user("donor-sub-1", "donor")
+
+
 def test_dynamo_claim_is_conditional_and_distinguishes_missing(repository):
     item = repository.create(donation())
     claimed = repository.claim(item["id"], "ngo-sub-1")
