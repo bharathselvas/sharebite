@@ -440,6 +440,9 @@ def build_artifacts(
                 "InvalidateShareBiteDistribution",
                 ["cloudfront:CreateInvalidation"],
                 f"arn:aws:cloudfront::{account_id}:distribution/*",
+                Condition={
+                    "StringEquals": {"aws:ResourceTag/Project": "ShareBite"}
+                },
             ),
         ]
     )
@@ -554,7 +557,7 @@ def build_artifacts(
         "The generated CloudFormation execution policy is a constrained draft, not an AWS-validated or approved policy. Validate every action/resource combination with IAM Access Analyzer and a non-production change set in the target account before attaching it.",
         "The CloudFormation execution policy uses exact fixed resource names where possible. Cognito user-pool and CloudFront identifiers are generated, while API Gateway ARNs omit the account ID. Resource '*' is limited to create/domain-description actions whose target is not yet addressable; trust remains scoped to the account and ShareBite stack.",
         "The execution-role draft includes exact-name delete actions for failed-stack rollback. These remain destructive capabilities and must be reviewed together with DeletionPolicy/UpdateReplacePolicy, termination protection, and the cleanup plan.",
-        "The deploy policy scopes CloudFront invalidation to distributions in this account because the stack creates a distribution ID dynamically. After deployment, narrow this statement to the exact FrontendDistribution ARN if the workflow remains functional.",
+        "The deploy policy scopes CloudFront invalidation to this account and aws:ResourceTag/Project=ShareBite because the stack creates a distribution ID dynamically. After deployment, narrow this statement to the exact FrontendDistribution ARN if the workflow remains functional.",
         "Confirm whether first-time Cognito domain setup requires an administrator-created service-linked role; do not broaden the CloudFormation execution role to create arbitrary service-linked roles.",
     ]
     plan = {

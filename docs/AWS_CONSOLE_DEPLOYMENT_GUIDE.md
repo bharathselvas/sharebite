@@ -2,9 +2,9 @@
 
 ## Current truthful state
 
-There are no project AWS resources, resource IDs, screenshots, logs, invocations, or deployment outputs to inspect. AWS credentials/account settings were not accessed. This document describes what a later, separately approved deployment demonstration would verify; it is not authorization or deployment evidence.
+ShareBite bootstrap resources exist and were verified on 2026-10-29: the GitHub OIDC provider, three tagged scoped IAM roles, a tagged runtime boundary, and an empty, private, SSE-S3 artifact bucket. The `smart-food-demo` application stack, change set, frontend, API, Cognito pool, DynamoDB table, Lambda functions, and ETL outputs do not exist. There are no live application URLs, requests, or application logs. This document describes later verification; it is not evidence that the application is deployed.
 
-The account owner reports approximately USD 100 in credits, but the balance, expiration, eligible services, account plan, region coverage, and billing are unverified. Credits are not a zero-dollar guarantee. Do not upgrade the account or deploy until account-specific pricing, eligibility, the exact change set, permissions, and cleanup have been reviewed and the user explicitly approves.
+The account plan reports PAID/ACTIVE and USD 0 remaining Free Tier credits. Cost Explorer is denied for the current identity; a previously reported approximate USD 100 credit balance is unverified. Credits are not a zero-dollar guarantee. Costs and credit coverage are incomplete. Do not execute the application stack until account-specific pricing, eligibility, the exact change set, permissions, cleanup, and independent reviewer approval are satisfied.
 
 ## Resource inventory in the template
 
@@ -14,9 +14,9 @@ The account owner reports approximately USD 100 in credits, but the balance, exp
 | API Gateway | HTTP API and stage | JWT issuer/audience, routes, actual URL | Requests and transfer may cost; local origins only are configured. |
 | Lambda | Python 3.12 function | Invocation/error metrics, timeout/memory, environment table name | Duration, memory, invocations, logs and transfer are cost drivers. |
 | DynamoDB | Donation table, five GSIs | Table/items, conditional writes, indexes and queries | On-demand requests, table/index storage and write amplification; admin aggregate bound is 500. |
-| S3 | Private ETL analytics bucket | Block Public Access, encryption, lifecycle, objects | Storage, requests and transfer may cost. No upload is authorized by this guide. |
+| S3 | Empty private SAM artifact bucket `sharebite-721733429166-ap-south-1-artifacts` exists; application analytics bucket not deployed | Artifact bucket Block Public Access, SSE-S3, `BucketOwnerEnforced`, tags, 90-day lifecycle, and empty prefix verified | Storage, requests and transfer may cost; no application analytics object exists. |
 | CloudWatch | Function log group, 7-day retention | Actual structured logs, retention and metrics | Ingestion/storage can cost even with bounded retention. |
-| IAM | Lambda role | Table-scoped item actions, five index queries, log writes only | No Lambda admin or S3 permission. Deployment OIDC role is separate and not configured. |
+| IAM | Deployment/review/CloudFormation roles and runtime boundary exist; template Lambda roles are not deployed | Exact GitHub environment trust, scoped policies, boundary policy and tags | Deployment role simulation denies unrelated bucket and role access. Human `ShareBiteDeploy` still has AdministratorAccess. |
 | CloudFormation/SAM | Stack and outputs | Stack status/events, exact resource inventory | SAM may create/use a separate artifact bucket. |
 
 Eligibility and regional pricing for every service are unknown. See [COST_AND_SECURITY.md](../COST_AND_SECURITY.md) and [AWS readiness report](../AWS_READINESS_REPORT.md).
@@ -33,4 +33,4 @@ Eligibility and regional pricing for every service are unknown. See [COST_AND_SE
 8. **GitHub:** show actual test workflow history separately from any manually approved deployment run. Local tests are not GitHub/AWS evidence.
 9. **Cleanup/cost:** follow exact resource inventory and cleanup procedure, then check billing for delayed usage charges.
 
-Do not invent screenshots, resource identifiers, logs, bills, or successful requests. For the manual OIDC and stack procedure, see [AWS Console guide](./AWS_CONSOLE_GUIDE.md). No deployment, upload, or workflow dispatch is authorized here.
+Do not invent screenshots, resource identifiers, logs, bills, or successful requests. For the bootstrap inventory and remaining approval gate, see [AWS bootstrap guide](./AWS_BOOTSTRAP_GUIDE.md). No application deployment or workflow dispatch has been performed.

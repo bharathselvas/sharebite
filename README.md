@@ -4,9 +4,9 @@
 
 A local-first food redistribution and analytics product for a college cloud-computing project. ShareBite combines a role-based React application, FastAPI, SQLite, Pandas ETL, automated checks, and an optional AWS serverless template.
 
-> **Zero-cost guardrail:** The local baseline creates no AWS resources. No AWS resources have been deployed by this project. Do not run deployment workflows or SAM/CloudFormation deployment commands until account/region eligibility, current pricing, the complete resource inventory, cleanup, and a specific deployment have been reviewed and explicitly approved. No AWS service is claimed to be free.
+> **Cost guardrail:** The local baseline needs no AWS resources. ShareBite's deployment bootstrap now has a GitHub OIDC provider, three scoped IAM roles, a Lambda runtime permissions boundary, and an empty private artifact bucket. The application stack has **not** been deployed. The account plan reports PAID/ACTIVE with USD 0 remaining Free Tier credits; Cost Explorer is unavailable to this identity, so total costs and any additional credits remain unverified. Do not dispatch the deployment workflow until cost/change-set review and an independent `aws-demo` reviewer are in place. No AWS service is claimed to be free.
 >
-> The user reports approximately USD 100 in AWS credits; balance, expiry, eligible services, account plan, region coverage, and applicable terms have not been independently verified. Credits are not a zero-dollar guarantee.
+> A previously reported approximate USD 100 credit balance is not verified and is not assumed to cover any charges.
 
 ## What is implemented
 
@@ -15,15 +15,15 @@ A local-first food redistribution and analytics product for a college cloud-comp
 - **Optional cloud backend:** DynamoDB conditional updates and transactions that record donation audit events atomically; status/donor/recipient/event/deadline indexes; Cognito JWT authorizer; Lambda derives identity and role only from validated claims.
 - **Pandas ETL:** bounded CSV/JSON ingestion, timestamp/type/state validation, duplicate rejection, minimized rejection details, unit-separated summaries, daily/status aggregates, and run metadata.
 - **AWS target:** SAM template for Cognito, a Cognito-JWT-protected API Gateway HTTP API, DynamoDB, bounded API and Pandas ETL Lambdas, private analytics/frontend S3 buckets, CloudFront HTTPS hosting, runtime permissions boundaries, and bounded CloudWatch log retention.
-- **Automation:** GitHub CI tests/build/template checks; separate manually gated, review/execute AWS workflow using OIDC, followed by frontend upload and smoke checks. AWS deployment has not been run.
+- **Automation:** GitHub CI tests/build/template checks; separate manually gated, review/execute AWS workflow using OIDC, followed by frontend upload and smoke checks. Bootstrap is configured; the deployment workflow has not been run.
 
 ## Local mode and deployment boundaries
 
 - Local accounts are **not authentication**. The account switcher is enabled only with `VITE_AUTH_MODE=local-demo` in Vite development mode and `APP_MODE=local-demo` with `DONATION_STORE=sqlite` for FastAPI; use synthetic users/data only.
 - SQLite is a local development store. The optional target Lambda adapter uses DynamoDB condition expressions for competing claims.
 - The AWS frontend auth client uses OIDC authorization code + PKCE. API Gateway validates Cognito access tokens before Lambda; Lambda maps only the Cognito `sub` and assigned `cognito:groups` claims to roles. Authenticated cloud views refresh every eight seconds while visible. Production frontend builds require explicit HTTPS API and Cognito configuration; no cloud application identity is built into the frontend.
-- No AWS resource is deployed, no AWS Console screenshot or resource ID is available, and no live AWS behavior has been verified.
-- The AWS template defines API, API Lambda, ETL Lambda, DynamoDB table and five GSIs, private analytics/frontend S3, CloudFront, IAM roles with a required pre-created runtime permissions boundary, CloudWatch, Cognito User Pool/client/groups, and a managed-login domain. These are configuration only; none has been deployed. Account-plan eligibility and current costs are not verified.
+- The AWS bootstrap resources are the OIDC provider, three IAM roles, runtime boundary, and empty private artifact bucket. No application stack, frontend URL, API endpoint, or live application behavior has been verified.
+- The AWS template defines API, API Lambda, ETL Lambda, DynamoDB table and five GSIs, private analytics/frontend S3, CloudFront, IAM roles with a pre-created runtime boundary, CloudWatch, Cognito User Pool/client/groups, and a managed-login domain. These application resources have not been deployed. The required independent GitHub environment reviewer is missing.
 - The deadline GSI lets bounded cloud expiry processing select due listings without repeatedly paging unrelated available donations; its storage/write costs are included in the review.
 - The DynamoDB repository's donation/audit writes are transactionally coupled. Administrative aggregation reads are bounded to 500 records; this and the three role groups are teaching-scale design, not production user administration.
 - Self-registration through the Cognito managed-login flow is a prepared design only; new users have no application role until an administrator assigns exactly one group. AWS-side list/suspend/reactivate user workflows are not implemented in the Lambda adapter. Local profile suspension is a demo-only SQLite feature.

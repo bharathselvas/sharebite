@@ -4,9 +4,11 @@
 
 ## Summary
 
-The existing Git repository was refined in place as ShareBite. The UI includes an operations-focused admin overview with API-backed KPIs, activity/ETL/deadline summaries, date filters, a responsive donations table, and confirmation dialogs. Local donor/recipient workflows use FastAPI and SQLite. The cloud target includes a CloudFront-hosted private S3 frontend, Cognito JWT authorization, API Gateway, Lambda, DynamoDB, and a manually invoked Pandas ETL Lambda writing private S3 reports. These AWS resources are not deployed.
+The existing Git repository was refined in place as ShareBite. The UI includes an operations-focused admin overview with API-backed KPIs, activity/ETL/deadline summaries, date filters, a responsive donations table, and confirmation dialogs. Local donor/recipient workflows use FastAPI and SQLite. The cloud target includes a CloudFront-hosted private S3 frontend, Cognito JWT authorization, API Gateway, Lambda, DynamoDB, and a manually invoked Pandas ETL Lambda writing private S3 reports. The application stack itself is not deployed.
 
-On 2026-10-29, `sts:GetCallerIdentity` verified the `sharebite` Identity Center session as the non-root assumed role `AWSReservedSSO_ShareBiteDeploy_600daa5af1121ef0`. No ShareBite stack exists; the only listed S3 bucket was `smartslot-datalake`, which is unrelated and must not be touched. IAM OIDC-provider listing and billing/free-tier reads were denied. GitHub CI run 40863998144 passed on commit `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`. Both deployment environments now allow only `main`, disable administrator bypass, and have the verified account/region variables set. Deployment role ARNs, the runtime boundary, artifact bucket, and an independent `aws-demo` reviewer are still missing. No AWS resources were created or uploaded.
+On 2026-10-29, `sts:GetCallerIdentity` verified account `721733429166` and the non-root assumed role `AWSReservedSSO_ShareBiteDeploy_600daa5af1121ef0` in `ap-south-1`. The `smart-food-demo` stack is absent. ShareBite bootstrap resources now exist: the GitHub OIDC provider; the tagged `sharebite-github-deploy`, `sharebite-github-review`, and `sharebite-cloudformation-execution` roles; the tagged `sharebite-lambda-runtime-boundary` policy; and the tagged, private, SSE-S3 artifact bucket `sharebite-721733429166-ap-south-1-artifacts` with a 90-day artifact lifecycle. The bucket has no uploaded artifacts. Matching role ARNs and bucket configuration are set as GitHub environment variables. The deployment environments are main-only with administrator bypass disabled, but `aws-demo` has no independent required reviewer; repository collaborator inspection returned only the owner. No application stack, change set, Lambda, database, Cognito pool, frontend, or analytics bucket was created. Cost Explorer access was denied; the account plan reports PAID/ACTIVE and $0 remaining Free Tier credits. Costs and credit coverage cannot be fully verified. `smartslot-datalake` remains unrelated and untouched.
+
+The policy bootstrap fix is committed as `26690c1bc36855cc1d21c7a8d8df80f7d97a31d0`. GitHub CI run 40868228770 passed on that commit. No live application URL or API endpoint exists.
 
 The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec92692758dfa843ec44658d001a5c2a03eb16c0d84b4ed431ef2a6ad1272`. Earlier browser smoke tests used a separate synthetic SQLite file at `/tmp/sharebite-ui-check-20261029.db`; no donation, account, or ETL mutation was submitted during that browser check.
 
@@ -25,15 +27,16 @@ The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec9
 | Analytics | Implemented with bounds | Definitions in `ARCHITECTURE.md`; local dashboard and analytics aggregate database records; cloud aggregation/list/export fails beyond 500 donations; completed quantities are only pickup-confirmed and grouped by unit |
 | ETL | Implemented and locally tested | Bounded CSV/JSON transformation plus a cloud Lambda that scans actual DynamoDB records and writes six run-scoped S3 reports when deployed; no live invocation has occurred |
 | S3 integration | Two distinct paths | Local uploads are opt-in and tested with mocks. Cloud ETL writes to the template's private analytics bucket; no real S3 object exists. |
-| AWS target | Template/source only | CloudFront/OAC private frontend, Cognito PKCE, API Gateway JWT authorizer, Lambda, DynamoDB with five GSIs, separate private S3 buckets, IAM, CloudWatch retention; not live-tested |
-| CI/CD | Test CI verified; deployment blocked | GitHub Actions run 40863998144 passed on `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`. Both deployment environments are main-only with admin bypass disabled and account/region variables set. Remaining variables, an independent `aws-demo` reviewer, and OIDC roles/provider are unavailable. |
-| AWS Console/deployment | Not performed | The assumed `ShareBiteDeploy` role identity was verified. No stack, change set, project resources, live URL, or deployment run exists. Billing/Free Tier reads and IAM OIDC provider listing were denied; never touch `smartslot-datalake`. |
+| AWS target | Application template/source only | CloudFront/OAC private frontend, Cognito PKCE, API Gateway JWT authorizer, Lambda, DynamoDB with five GSIs, application S3 buckets, and CloudWatch; not deployed |
+| CI/CD | Test CI verified; deployment blocked | GitHub Actions run 40868228770 passed on `26690c1bc36855cc1d21c7a8d8df80f7d97a31d0`. Role and artifact variables are configured; environments are main-only with admin bypass disabled. `aws-demo` still needs an independent required reviewer. |
+| AWS bootstrap | Partially provisioned | Tagged GitHub OIDC provider, three scoped roles, runtime boundary, and an empty, private, encrypted artifact bucket exist. IAM Access Analyzer validation returned no findings for the generated identity policies after the committed fixes. |
+| AWS Console/deployment | Application not deployed | The assumed `ShareBiteDeploy` identity and exact bootstrap resources were verified. No application stack/change set, live URL, or API endpoint exists. Cost Explorer is denied; the account plan reports PAID/ACTIVE and zero remaining Free Tier credits. Do not touch `smartslot-datalake`. |
 
 ## Final verification log
 
 | Command/check | Outcome |
 |---|---|
-| `.venv/bin/python -m pytest -q` | **114 passed, 1 warning** (Starlette/httpx deprecation warning) |
+| Python 3.12 isolated `pytest -q backend/tests etl/tests scripts/tests` | **114 passed, 1 warning** (Starlette/httpx deprecation warning) |
 | Python compilation and shell syntax | **Passed** for backend, ETL, scripts, and shell wrappers |
 | `cd frontend && npm run lint && npm run build` | **Passed**; TypeScript check and Vite production build succeeded with placeholder Cognito/API values |
 | `.venv/bin/cfn-lint template.yaml`, `sam validate --lint --template-file template.yaml`, and `sam build --template-file template.yaml` | **Passed** locally; GitHub infrastructure validation also passed in run 40863998144. SAM CLI was isolated under `/tmp`, not installed into the project. |
@@ -47,12 +50,15 @@ The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec9
 | Simulated API 503 during refresh | **Passed**; the UI displayed the API error and did not show a success notification; route interception was removed after the check. |
 | Isolated preview data | **Passed**; separate temp database seeded with 8 synthetic donation records; it was not the existing application database. |
 | Source marker scan for AWS key IDs/private-key blocks | **No matches**; scan reported filenames only on findings and did not output values |
-| AWS `sts get-caller-identity` | **Passed read-only**; expected account and assumed non-root `ShareBiteDeploy` Identity Center role verified |
-| AWS regional inventory | **Passed read-only**; no stack, Lambda function, or DynamoDB table listed; only `smartslot-datalake` listed as a bucket and explicitly excluded |
-| IAM role inspection, Access Analyzer policy validation, Cost Explorer, Free Tier | **Blocked** by `AccessDenied`; role permissions and account billing eligibility cannot be confirmed |
-| GitHub environments | Both exist; `aws-demo` and `aws-demo-review` now allow only `main`, and administrator bypass is disabled. Required variables and independent `aws-demo` reviewer remain unconfigured. |
-| GitHub Actions | **PASS** for run 40863998144 on `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`; backend/ETL, frontend, and infrastructure jobs succeeded. |
-| Live AWS deployment and cloud browser flow | **Not run**; no AWS mutations were authorized or performed |
+| AWS `sts get-caller-identity` | **Passed**; account `721733429166` and non-root assumed `ShareBiteDeploy` Identity Center role verified |
+| AWS application stack | **Not present**; exact `smart-food-demo` lookup returned `ValidationError: Stack with id smart-food-demo does not exist` |
+| AWS bootstrap resources | **Created and verified**; GitHub OIDC provider, deployment/review/CloudFormation roles, runtime boundary, artifact bucket security settings and tags |
+| IAM Access Analyzer | **Passed** with no findings for deployment, review, CloudFormation, API runtime, ETL runtime, and boundary candidate policies after corrections |
+| Deployment-role simulation | **Passed**; ShareBite artifact object upload allowed, unrelated bucket upload and administrator `PassRole` denied |
+| AWS billing | Cost Explorer returned `AccessDeniedException: User not enabled for cost explorer access`; account plan reports PAID/ACTIVE and USD 0 remaining Free Tier credits. Full costs/credits are unverified. |
+| GitHub environments | Both are main-only with administrator bypass disabled. All documented role/bucket variables are configured. `aws-demo` still lacks an independent reviewer; only repository owner was listed as collaborator. |
+| GitHub Actions | **PASS** for run 40868228770 on `26690c1bc36855cc1d21c7a8d8df80f7d97a31d0`; backend/ETL, frontend, and infrastructure jobs succeeded. |
+| Live AWS deployment and cloud browser flow | **Not run**; no change set was created or executed and no application stack resources were deployed. |
 
 ## Important limitations
 

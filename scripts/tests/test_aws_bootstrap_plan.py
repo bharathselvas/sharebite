@@ -118,6 +118,9 @@ def test_candidate_deploy_policy_limits_passrole_and_marks_cloudfront_scope():
     assert invalidation["Resource"] == (
         "arn:aws:cloudfront::123456789012:distribution/*"
     )
+    assert invalidation["Condition"]["StringEquals"] == {
+        "aws:ResourceTag/Project": "ShareBite"
+    }
 
 
 def test_cloudformation_policy_draft_is_account_scoped_and_has_no_wildcard_actions():

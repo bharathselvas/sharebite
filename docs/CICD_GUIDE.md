@@ -8,7 +8,7 @@
 - Frontend npm install from the lock file, TypeScript lint, and Vite production build.
 - Credential-marker checks, `cfn-lint`, workflow YAML parsing, and AWS SAM template validation.
 
-A successful local run is not evidence of a GitHub Actions run. Current verified run: [40863998144](https://github.com/bharathselvas/sharebite/actions/runs/40863998144), passing backend/ETL, frontend, and infrastructure jobs on commit `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`.
+A successful local run is not evidence of a GitHub Actions run. Current verified run: [40868228770](https://github.com/bharathselvas/sharebite/actions/runs/40868228770), passing backend/ETL, frontend, and infrastructure jobs on commit `26690c1bc36855cc1d21c7a8d8df80f7d97a31d0`.
 
 ## Optional AWS deployment
 
@@ -43,13 +43,17 @@ Set these as environment variables, not secrets:
 
 Both environments are configured to allow only the `main` branch, and administrator bypass is disabled. `aws-demo` still needs an independent required reviewer; repository collaborator inspection returned only the repository owner, so self-approval is not configured. Do not configure reviewers on `aws-demo-review`. The review role must be read-only and distinct from the deployment and CloudFormation execution roles.
 
+The GitHub OIDC provider, scoped deployment/review/CloudFormation roles, Lambda runtime permissions boundary, and dedicated artifact bucket are provisioned and tagged for ShareBite. All listed role and bucket variables are configured in the corresponding environments. Do not dispatch the workflow until an independent reviewer is added to `aws-demo`; the application's change set and stack do not exist yet.
+
 ### Artifact bucket requirements
 
-The bucket must exist before a prepare run. Create it only in a separately approved AWS change. It must:
+The pre-created bucket is `sharebite-721733429166-ap-south-1-artifacts`. Verified settings:
 
-- Be in `ap-south-1` and be a ShareBite-approved bucket—not an assumed reuse of `smartslot-datalake`.
-- Block all public access, have no public bucket policy, and use private access only.
-- Default-encrypt objects (SSE-S3 is sufficient for this workflow) and use S3 Object Ownership `BucketOwnerEnforced`.
+- It is in `ap-south-1`, tagged `Project=ShareBite`, and distinct from `smartslot-datalake`.
+- All four Block Public Access settings are enabled.
+- Default encryption is SSE-S3 and Object Ownership is `BucketOwnerEnforced`.
+- A 90-day lifecycle expires the `sharebite/artifacts/` prefix and aborts incomplete multipart uploads after seven days.
+- The bucket currently has no uploaded artifacts.
 - Grant the deployment role only the required bucket-location/list and object-upload/read/multipart permissions under `sharebite/artifacts/*`.
 - Allow that deployment role to read the bucket's public-access block, encryption, and ownership controls; the prepare job checks the region and requires all four public-access blocks, default SSE-S3, and `BucketOwnerEnforced` before packaging.
 - Grant the CloudFormation execution role read access only to the same artifact prefix.
@@ -57,16 +61,16 @@ The bucket must exist before a prepare run. Create it only in a separately appro
 
 The workflow uploads a packaged template into that prefix and also uses `sam package` to upload function artifacts there. It does not configure the bucket, enable public hosting, or clean up prior packages.
 
-### IAM/OIDC roles (configuration only; not created here)
+### IAM/OIDC roles (provisioned and verified)
 
 - **Human Identity Center identity:** not reused by Actions and not represented by these workflow roles.
-- **GitHub deployment role:** trust the GitHub OIDC provider with `aud=sts.amazonaws.com` and `sub=repo:bharathselvas/sharebite:environment:aws-demo`. Restrict actions to create/inspect/execute only named ShareBite change sets; inspect the exact artifact bucket; upload/read artifacts only in `sharebite/artifacts/*`; allow `s3:ListBucket`/`s3:GetBucketLocation` on and object uploads only to `sharebite-${account}-${region}-frontend`; create invalidations only for the ShareBite distribution; and `iam:PassRole` only for `CFN_EXECUTION_ROLE_ARN` to CloudFormation. CloudFront’s generated distribution ID prevents an exact distribution ARN from being known before first creation; constrain invalidation to this account and an approved tag condition only if supported, then replace with the exact ARN once available. It must not be AdministratorAccess or a Lambda role.
+- **GitHub deployment role:** trust the GitHub OIDC provider with `aud=sts.amazonaws.com` and `sub=repo:bharathselvas/sharebite:environment:aws-demo`. Restrict actions to create/inspect/execute only named ShareBite change sets; inspect the exact artifact bucket; upload/read artifacts only in `sharebite/artifacts/*`; allow `s3:ListBucket`/`s3:GetBucketLocation` on and object uploads only to `sharebite-${account}-${region}-frontend`; create invalidations only for account distributions tagged `Project=ShareBite`; and `iam:PassRole` only for `CFN_EXECUTION_ROLE_ARN` to CloudFormation. The approved workflow supplies the ShareBite stack tag. After deployment, narrow invalidation to the exact distribution ARN if compatible with the workflow. It must not be AdministratorAccess or a Lambda role.
 - **GitHub review role:** separate trust with `sub=repo:bharathselvas/sharebite:environment:aws-demo-review`; read-only `DescribeChangeSet` and `DescribeStacks` for the intended stack/change-set scope.
 - **CloudFormation execution role:** trust `cloudformation.amazonaws.com`; its permission policy is separate and limited to the exact resources CloudFormation manages. It must create only the two named Lambda roles with `RUNTIME_PERMISSIONS_BOUNDARY_ARN`, attach the template's exact inline policies, and pass those roles only to Lambda. It must not be the human role or GitHub caller role.
 - **Lambda application runtime role:** defined by the template; DynamoDB item/transaction actions on the donation table, GSI query, and function log writes.
 - **Lambda ETL runtime role:** defined by the template; DynamoDB `Scan` on the donation table, S3 `PutObject` only under the analytics `etl/` prefix, and ETL log writes.
 
-The current template creates the Cognito pool, HTTP API, and CloudFront distribution with generated IDs. Analytics and frontend bucket names are deterministic from the account ID and region to make S3 object policies reviewable; still check global name availability and account ownership. Exact-resource least-privilege policies cannot safely scope all generated resources in the first stack operation, especially CloudFront invalidation and generated API/Cognito ARNs. The template now requires a pre-created runtime permissions boundary; the CloudFormation execution role must create only the two named Lambda runtime roles, attach that boundary, and pass those roles only to Lambda. The deployment policy must be checked against the actual SAM-transformed template, including CloudFront and S3 changes. No role, trust policy, permission policy, OIDC provider, or bucket has been created or attached by this repository change.
+The current template creates the Cognito pool, HTTP API, and CloudFront distribution with generated IDs. Analytics and frontend bucket names are deterministic from the account ID and region; their global availability was not verified. Exact-resource least-privilege policies cannot safely scope all generated resources in the first stack operation, especially CloudFront invalidation and generated API/Cognito ARNs. The template requires the pre-created runtime permissions boundary; the CloudFormation execution role creates only the two named Lambda runtime roles, attaches that boundary, and passes those roles only to Lambda. IAM Access Analyzer returned no findings on the current identity-policy candidates; this is not a substitute for inspecting the real change set or independent approval.
 
 ### Persistent data and rollback
 
@@ -78,7 +82,7 @@ The workflow shows all proposed resource actions and replacements before protect
 
 ### Deployment blockers and local boundaries
 
-- The artifact bucket, deployment/review OIDC roles, CloudFormation execution role, trust policies, environment variables, and GitHub environment protections must be provisioned/configured separately.
+- The artifact bucket, deployment/review OIDC roles, CloudFormation execution role, trust policies, and GitHub environment variables are provisioned/configured. An independent required reviewer for `aws-demo` remains missing.
 - The template creates Cognito, API Gateway, and CloudFront resources with generated identifiers; only the bucket names are deterministic. The reviewed exact-resource policy design still needs specific scoping for generated APIs, Cognito resources, and the CloudFront distribution.
 - The new CloudFront frontend and AWS ETL Lambda add resources and cost exposure; current regional pricing and account eligibility have not been verified.
 - The stack requires `RUNTIME_PERMISSIONS_BOUNDARY_ARN`; a suitably restrictive boundary must exist and be reviewed before creating a change set.

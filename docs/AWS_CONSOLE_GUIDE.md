@@ -2,11 +2,11 @@
 
 ## Current state
 
-The project is local-only. There are no project AWS resources, deployment outputs, invocations, logs, screenshots, or resource IDs to show. The following steps are a future demonstration guide, not evidence that a deployment succeeded.
+The ShareBite bootstrap exists: a GitHub OIDC provider; tagged deployment, read-only review, and CloudFormation roles; a tagged runtime boundary; and an empty private artifact bucket. The application stack `smart-food-demo` does not exist. There are no application deployment outputs, invocations, logs, screenshots, or live frontend/API URLs. The following steps are a future application demonstration guide, not evidence that deployment succeeded.
 
 ## Before any AWS activity
 
-Do not upgrade the account or create resources as part of setup. The user reports approximately USD 100 in credits, but the balance, expiry, eligible services, account plan, region coverage, and current pricing have not been verified. Credits are not a zero-dollar guarantee. Before any separately approved deployment:
+Do not upgrade the account. The account plan reports PAID/ACTIVE and USD 0 remaining Free Tier credits. Cost Explorer access is denied; the previously reported approximate USD 100 credit balance is unverified. Credits are not a zero-dollar guarantee. Before any application stack deployment:
 
 1. Select the account and region intentionally; confirm account type/plan, credit balance/expiry/coverage, current billing allowances and overage exposure in the account's Billing console.
 2. Review current regional pricing for every item in the inventory below. Include storage, requests, function duration/memory, API calls, networking and data transfer, CloudWatch logs/retention, artifact storage, and any stack/deployment ancillary resources. AWS free-use allowances are conditional and are not a spending cap.
@@ -14,7 +14,7 @@ Do not upgrade the account or create resources as part of setup. The user report
 4. Review the OIDC trust relationship and deployment IAM policy. Never use administrator access keys or commit credentials.
 5. Provide the resource-specific usage/cost estimate, account eligibility evidence, and cleanup steps to the user and obtain explicit approval before resource creation.
 
-If eligibility or a zero-cost estimate cannot be verified, keep the project local. The project template's Cognito user pool/domain, API Gateway, Lambda, DynamoDB table and GSIs, S3 bucket, log group, and SAM deployment artifact bucket all have potential billable usage. No account-specific plan entitlement has been checked.
+The artifact bucket is `sharebite-721733429166-ap-south-1-artifacts`; it is in `ap-south-1`, private, SSE-S3 encrypted, BucketOwnerEnforced, tagged, empty, and expires the `sharebite/artifacts/` prefix after 90 days. The application template's Cognito user pool/domain, API Gateway, Lambda, DynamoDB table and GSIs, frontend/analytics S3 buckets, CloudFront distribution, and log groups have potential billable usage. Overall account costs/credit coverage remain unverified.
 
 ## Template inventory (only if explicitly approved)
 
@@ -56,11 +56,11 @@ Use the selected AWS account and region; do not invent or copy placeholder IDs i
 9. **ETL:** open the deployed `ETLFunctionName` Lambda in the Console and manually invoke it with `{}` after separately approving the invocation and possible usage charges. Confirm the response's run ID/counts and open the exact `etl/runs/<run-id>/` prefix in the private `AnalyticsBucketName`. It scans actual DynamoDB records and writes the Pandas report set; this is not a Glue job.
 10. **GitHub Actions:** show actual test workflow run history and, separately, any manually approved deployment run. Local or simulated output is not AWS Console evidence.
 
-## GitHub OIDC setup (future, manual security work)
+## GitHub OIDC setup (bootstrap provisioned; reviewer remains required)
 
-Do not store an AWS access key in GitHub secrets. An account administrator would have to intentionally configure GitHub's OIDC provider, a dedicated deployment role, the trust policy restricted to the exact repository and `aws-demo` environment, and a narrow permission policy. The role ARN and region belong in GitHub Actions **variables**, not credentials. Configure required reviewers on the GitHub `aws-demo` environment.
+Do not store an AWS access key in GitHub secrets. The OIDC provider and dedicated deployment/review/CloudFormation roles are configured with exact environment trust subjects and narrow policies. Role ARNs and region are in GitHub Actions **variables**, not credentials. Configure an independent required reviewer on the GitHub `aws-demo` environment before using the workflow; only the repository owner is currently a collaborator.
 
-The deployment workflow is manually invoked, requires both cost-review and deployment-approval booleans, and is restricted by workflow condition to `main`. GitHub environment reviewers and allowed-branch restrictions still need to be configured manually. Its `prepare-change-set` operation packages code into an explicitly configured, pre-created `SAM_ARTIFACT_BUCKET` with prefix `sharebite/artifacts`, then creates a non-executed change set named `smart-food-demo-<run-id>-<run-attempt>`. It does not use `--resolve-s3` or create a bucket. The separate `execute-reviewed-change-set` operation first uses a read-only OIDC role to describe and verify the actual change set and stack identity; only after the resource summary is available does the protected `aws-demo` environment gate execution. The execution job rechecks the exact change-set ARN and stack identity after approval. Review required variables, roles, trust scopes, and artifact bucket properties in [the detailed CI/CD guide](./CICD_GUIDE.md). No workflow has been run from this project.
+The deployment workflow is manually invoked, requires both cost-review and deployment-approval booleans, and is restricted by workflow condition to `main`. The environments are main-only with administrator bypass disabled. The `aws-demo` independent reviewer remains missing, so do not dispatch the workflow. Its `prepare-change-set` operation packages code into the configured `SAM_ARTIFACT_BUCKET` with prefix `sharebite/artifacts`, then creates a non-executed change set named `smart-food-demo-<run-id>-<run-attempt>`. It does not use `--resolve-s3` or create a bucket. The separate `execute-reviewed-change-set` operation uses a read-only OIDC role to describe and verify the actual change set and stack identity; the protected `aws-demo` environment must independently approve execution. Review roles, trust scopes, and bucket properties in [the detailed CI/CD guide](./CICD_GUIDE.md). No deployment workflow has been run.
 
 The execution role in the template is fixed to the project Lambda role name. A deployment role still needs permissions to manage this stack's named resources and the packaged Lambda artifacts, and narrowly scoped `iam:PassRole` for that Lambda role. Verify the account's CloudFormation service-role/deployment model and exact resource ARNs before writing its policy; do not use administrator access as a shortcut. A separate caller needs narrowly scoped `execute-api:Invoke` for the intended API/stage/method/routes.
 
