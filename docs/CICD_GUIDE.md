@@ -8,7 +8,7 @@
 - Frontend npm install from the lock file, TypeScript lint, and Vite production build.
 - Credential-marker checks, `cfn-lint`, workflow YAML parsing, and AWS SAM template validation.
 
-A successful local run is not evidence of a GitHub Actions run. Current verified run: [40863469358](https://github.com/bharathselvas/sharebite/actions/runs/40863469358), passing backend/ETL, frontend, and infrastructure jobs on commit `beba997e7fd92dfc2ea8f00329eb60931f3d2376`.
+A successful local run is not evidence of a GitHub Actions run. Current verified run: [40863998144](https://github.com/bharathselvas/sharebite/actions/runs/40863998144), passing backend/ETL, frontend, and infrastructure jobs on commit `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`.
 
 ## Optional AWS deployment
 

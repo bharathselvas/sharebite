@@ -12,7 +12,7 @@ The optional target includes Cognito OIDC authorization-code + PKCE, API Gateway
 
 The `sharebite` IAM Identity Center profile was verified with `sts:GetCallerIdentity` as `arn:aws:sts::721733429166:assumed-role/AWSReservedSSO_ShareBiteDeploy_600daa5af1121ef0/sharebite-deployer`. Read-only inventory found no ShareBite CloudFormation stack; earlier regional inventory listed no Lambda functions or DynamoDB tables. S3 listed only `smartslot-datalake`, which is unrelated and must not be modified or reused. The current role cannot list the OIDC provider or read several service resources. No AWS mutation, stack/change set, upload, or deployment was performed.
 
-The account's free-tier plan and spending history remain unverified: `freetier:GetAccountPlanState` and `ce:GetCostAndUsage` returned `AccessDenied`. IAM role-policy inspection and `access-analyzer:ValidatePolicy` are also denied, so generated IAM policy candidates cannot be treated as approved. `iam:ListOpenIDConnectProviders` is denied for resource `arn:aws:iam::721733429166:oidc-provider/*` to the active `ShareBiteDeploy` assumed role. Expected deployment roles and ShareBite buckets do not exist. GitHub CI run [40863469358](https://github.com/bharathselvas/sharebite/actions/runs/40863469358) passed on commit `beba997e7fd92dfc2ea8f00329eb60931f3d2376`. Both GitHub environments are now restricted to `main` with administrator bypass disabled, but `aws-demo` has no independent reviewer, and neither environment has its required variables. No change set or live deployment exists.
+The account's free-tier plan and spending history remain unverified: `freetier:GetAccountPlanState` and `ce:GetCostAndUsage` returned `AccessDenied`. IAM role-policy inspection and `access-analyzer:ValidatePolicy` are also denied, so generated IAM policy candidates cannot be treated as approved. `iam:ListOpenIDConnectProviders` is denied for resource `arn:aws:iam::721733429166:oidc-provider/*` to the active `ShareBiteDeploy` assumed role. Expected deployment roles and ShareBite buckets do not exist. GitHub CI run [40863998144](https://github.com/bharathselvas/sharebite/actions/runs/40863998144) passed on commit `92a532ff3a39ffd920f0e269ccafba7cf16e2e55`. Both GitHub environments are now restricted to `main` with administrator bypass disabled, and the known account/region values are set; `aws-demo` has no independent reviewer, and the remaining role, boundary, and bucket variables are unavailable. No change set or live deployment exists.
 
 ## Feature status and boundaries
 
@@ -28,7 +28,7 @@ The account's free-tier plan and spending history remain unverified: `freetier:G
 | Audit history | Backend-generated UTC events, actor/status metadata and request IDs; event reads role/participant scoped | Application audit data is not immutable or legally certified. No fabricated history for legacy records. |
 | ETL | Bounded Pandas CSV/JSON plus a manual-only cloud Lambda that reads DynamoDB and writes reports to private S3 | Local tests use fakes; no live invocation/object exists. No Glue/Athena use. |
 | Infrastructure | Parameterized SAM template for Cognito, API, Lambda, DynamoDB, private S3/CloudFront frontend, IAM, CloudWatch | SAM validation/build and `cfn-lint` passed locally. No stack/change set created. Five GSI, CloudFront, Cognito, and other cost drivers require review. |
-| CI/CD | Test-only CI and separate manual deployment workflow with approval inputs, `main` condition, OIDC, input validation | Current CI run 40863469358 passed. Environments allow only `main` and admins cannot bypass; independent reviewer, required variables, OIDC roles/provider, and AWS resources are still missing/unverified. |
+| CI/CD | Test-only CI and separate manual deployment workflow with approval inputs, `main` condition, OIDC, input validation | Current CI run 40863998144 passed. Environments allow only `main` and admins cannot bypass; independent reviewer, remaining required variables, OIDC roles/provider, and AWS resources are still missing/unverified. |
 | Cost/security | Inventory, risk/limits, cleanup steps and approval boundary documented | No account-specific pricing/credit eligibility or spending cap is established. |
 
 ## AWS resource inventory (not deployed)
@@ -54,7 +54,7 @@ Record command outcomes in [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md
 
 - Local unit tests and fake AWS client behavior (not live integration).
 - Template lint and workflow YAML parsing (not stack deployment).
-- GitHub Actions history (run 40863469358 passed, but does not indicate AWS deployment).
+- GitHub Actions history (run 40863998144 passed, but does not indicate AWS deployment).
 - AWS Console/resource evidence (none exists in this assessment).
 
 Live user/login, API requests, logs, metrics, DynamoDB records, S3 objects, billing/credit eligibility, deployment, and cleanup have not been verified. Read-only AWS identity/inventory calls and GitHub environment inspection were performed; IAM and billing reads were denied. GitHub's main-only branch policies and disabled admin bypass are configured, but independent approval is still unavailable. Do not present synthetic or mocked output as AWS evidence.
