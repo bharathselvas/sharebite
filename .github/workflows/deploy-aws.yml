@@ -1,0 +1,113 @@
+name: Optional AWS deployment (manual approval only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cost_reviewed:
+        description: I reviewed current account/region eligibility, pricing, and cleanup.
+        required: true
+        type: boolean
+        default: false
+      deploy_approved:
+        description: I explicitly approve creating the resources in the change set.
+        required: true
+        type: boolean
+        default: false
+      operation:
+        description: Prepare a non-executed change set or execute a previously reviewed one.
+        required: true
+        type: choice
+        options:
+          - prepare-change-set
+          - execute-reviewed-change-set
+        default: prepare-change-set
+      reviewed_change_set_arn:
+        description: Existing change set ARN (required only for execute-reviewed-change-set).
+        required: false
+        type: string
+      cognito_domain_prefix:
+        description: Globally unique lowercase Cognito domain prefix (required when preparing).
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ inputs.cost_reviewed && inputs.deploy_approved && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: aws-demo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment inputs
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}
+          DOMAIN_PREFIX: ${{ inputs.cognito_domain_prefix }}
+          DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          DEPLOY_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          operation = os.environ["OPERATION"]
+          region = os.environ["DEPLOY_REGION"]
+          role = os.environ["DEPLOY_ROLE_ARN"]
+          if not re.fullmatch(r"[a-z]{2}(?:-gov)?-[a-z]+-\d", region):
+              sys.exit("AWS_REGION must be a valid region identifier.")
+          if not re.fullmatch(r"arn:aws(?:-[a-z]+)*:iam::\d{12}:role/[A-Za-z0-9+=,.@_/-]+", role):
+              sys.exit("AWS_DEPLOY_ROLE_ARN must be a role ARN.")
+          if operation == "prepare-change-set":
+              domain = os.environ["DOMAIN_PREFIX"]
+              if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", domain):
+                  sys.exit("A valid Cognito domain prefix is required to prepare the stack.")
+          elif operation == "execute-reviewed-change-set":
+              arn = os.environ["CHANGE_SET_ARN"]
+              match = re.fullmatch(
+                  r"arn:aws(?:-[a-z]+)*:cloudformation:([a-z0-9-]+):\d{12}:changeSet/[A-Za-z0-9-]+/[A-Za-z0-9-]+",
+                  arn,
+              )
+              if not match or match.group(1) != region:
+                  sys.exit("Provide a reviewed CloudFormation change-set ARN in AWS_REGION.")
+          else:
+              sys.exit("Unsupported deployment operation.")
+          PY
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: aws-actions/setup-sam@v2
+      - name: Build
+        run: sam build --template-file template.yaml
+      - name: Configure temporary AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: smart-food-demo-deploy
+      - name: Review proposed resource changes
+        if: ${{ inputs.operation == 'prepare-change-set' }}
+        run: |
+          sam deploy \
+            --config-file /dev/null \
+            --stack-name smart-food-demo \
+            --region "${AWS_REGION}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --no-confirm-changeset \
+            --parameter-overrides "CognitoDomainPrefix=${DOMAIN_PREFIX}" \
+            --resolve-s3 \
+            --no-execute-changeset
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          DOMAIN_PREFIX: ${{ inputs.cognito_domain_prefix }}
+      - name: Execute reviewed change set
+        if: ${{ inputs.operation == 'execute-reviewed-change-set' }}
+        run: aws cloudformation execute-change-set --change-set-name "${CHANGE_SET_ARN}" --stack-name smart-food-demo
+        env:
+          CHANGE_SET_ARN: ${{ inputs.reviewed_change_set_arn }}

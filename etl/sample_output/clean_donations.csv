@@ -1,0 +1,3 @@
+id,donor_id,food_name,quantity,unit,pickup_deadline,status,claimed_by,created_at
+demo-001,donor-demo,Vegetable boxes,12.0,boxes,2026-10-29T12:30:00Z,available,,2026-10-28T04:30:00Z
+demo-002,donor-demo-2,Bread loaves,25.0,loaves,2026-10-29T17:00:00Z,picked_up,ngo-demo,2026-10-28T09:00:00Z

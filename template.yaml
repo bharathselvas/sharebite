@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Optional, low-scale teaching deployment for the Smart Food Redistribution API.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: smart-food-demo
+    MinLength: 3
+    MaxLength: 30
+    AllowedPattern: "^[a-z][a-z0-9-]*$"
+    Description: Lowercase project prefix used in resource names.
+  StageName:
+    Type: String
+    Default: demo
+    AllowedPattern: "^[a-zA-Z0-9_-]+$"
+    Description: API Gateway stage name.
+  CognitoDomainPrefix:
+    Type: String
+    MinLength: 1
+    MaxLength: 63
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Globally unique Cognito managed-login domain prefix; deployment requires availability and cost review.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+    Tracing: PassThrough
+
+Resources:
+  DonationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-donations"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: status_pk
+          AttributeType: S
+        - AttributeName: status_sk
+          AttributeType: S
+        - AttributeName: donor_pk
+          AttributeType: S
+        - AttributeName: donor_sk
+          AttributeType: S
+        - AttributeName: recipient_pk
+          AttributeType: S
+        - AttributeName: recipient_sk
+          AttributeType: S
+        - AttributeName: entity_pk
+          AttributeType: S
+        - AttributeName: entity_sk
+          AttributeType: S
+        - AttributeName: deadline_sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status_pk
+              KeyType: HASH
+            - AttributeName: status_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: donor-index
+          KeySchema:
+            - AttributeName: donor_pk
+              KeyType: HASH
+            - AttributeName: donor_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: recipient-index
+          KeySchema:
+            - AttributeName: recipient_pk
+              KeyType: HASH
+            - AttributeName: recipient_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: entity-index
+          KeySchema:
+            - AttributeName: entity_pk
+              KeyType: HASH
+            - AttributeName: entity_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: expiry-index
+          KeySchema:
+            - AttributeName: status_pk
+              KeyType: HASH
+            - AttributeName: deadline_sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-users"
+      UsernameConfiguration:
+        CaseSensitive: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: "OFF"
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 1
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+      UserPoolAddOns:
+        AdvancedSecurityMode: "OFF"
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "${ProjectName}-spa"
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+      CallbackURLs:
+        - http://127.0.0.1:5173/auth/callback
+        - http://localhost:5173/auth/callback
+      LogoutURLs:
+        - http://127.0.0.1:5173/
+        - http://localhost:5173/
+      SupportedIdentityProviders:
+        - COGNITO
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref CognitoUserPool
+
+  DonorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: food-donors
+      Description: Synthetic donor users; assign by an approved administrator.
+      UserPoolId: !Ref CognitoUserPool
+
+  NgoGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: food-ngos
+      Description: Synthetic NGO users; assign by an approved administrator.
+      UserPoolId: !Ref CognitoUserPool
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: food-admins
+      Description: Restricted synthetic project administrators.
+      UserPoolId: !Ref CognitoUserPool
+
+  AnalyticsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireDemonstrationObjects
+            Status: Enabled
+            ExpirationInDays: 30
+
+  DonationsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref StageName
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}"
+              audience:
+                - !Ref CognitoUserPoolClient
+        DefaultAuthorizer: CognitoAuthorizer
+      CorsConfiguration:
+        AllowOrigins:
+          - http://localhost:5173
+          - http://127.0.0.1:5173
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - GET
+          - POST
+          - PATCH
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: donations-table-and-function-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AccessDonationsTable
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:TransactWriteItems
+                Resource: !GetAtt DonationsTable.Arn
+              - Sid: QueryDonationIndexes
+                Effect: Allow
+                Action:
+                  - dynamodb:Query
+                Resource: !Sub "${DonationsTable.Arn}/index/*"
+              - Sid: WriteFunctionLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-api:*"
+
+  DonationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-api"
+      CodeUri: backend/
+      Handler: aws_handler.handler
+      Description: Validates demo donations and conditionally updates DynamoDB.
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          DONATIONS_TABLE: !Ref DonationsTable
+      Events:
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DonationsApi
+            Path: /api/health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DonationsApi
+            Path: /api/{proxy+}
+            Method: ANY
+
+  DonationsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-api"
+      RetentionInDays: 7
+
+Outputs:
+  ApiBaseUrl:
+    Description: HTTPS API base URL (no AWS deployment has been performed by this project).
+    Value: !Sub "https://${DonationsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${StageName}"
+  DonationsTableName:
+    Description: DynamoDB table name.
+    Value: !Ref DonationsTable
+  AnalyticsBucketName:
+    Description: Private S3 bucket for approved demonstration/ETL objects.
+    Value: !Ref AnalyticsBucket
+  LambdaFunctionName:
+    Description: Donation API function name.
+    Value: !Ref DonationsFunction
+  LambdaExecutionRoleName:
+    Description: Scoped Lambda execution role name.
+    Value: !Ref LambdaExecutionRole
+  CognitoUserPoolId:
+    Description: Cognito user pool identifier.
+    Value: !Ref CognitoUserPool
+  CognitoAppClientId:
+    Description: Public OAuth client identifier for the local SPA.
+    Value: !Ref CognitoUserPoolClient
+  CognitoIssuer:
+    Description: JWT issuer configured on API Gateway.
+    Value: !Sub "https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}"
+  CognitoHostedUi:
+    Description: Cognito managed-login host; domain prefix must be globally available.
+    Value: !Sub "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com"

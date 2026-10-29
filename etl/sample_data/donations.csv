@@ -1,0 +1,6 @@
+id,donor_id,food_name,quantity,unit,pickup_deadline,status,claimed_by,created_at
+demo-001,donor-demo,Vegetable boxes,12,boxes,2026-10-29T18:00:00+05:30,available,,2026-10-28T10:00:00+05:30
+demo-002,donor-demo-2,Bread loaves,25,loaves,2026-10-29T17:00:00Z,picked_up,ngo-demo,2026-10-28T09:00:00Z
+demo-003,donor-demo,Prepared meals,0,meals,2026-10-29T16:00:00Z,available,,2026-10-28T08:30:00Z
+demo-002,donor-demo-2,Bread loaves duplicate,10,loaves,2026-10-29T17:00:00Z,claimed,ngo-demo-2,2026-10-28T09:30:00Z
+demo-004,donor-demo,Fruit bags,8,bags,not-a-time,claimed,ngo-demo,2026-10-28T07:00:00Z

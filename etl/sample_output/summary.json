@@ -1,0 +1,18 @@
+{
+  "total_clean_donations": 2,
+  "rejected_records": 3,
+  "completed_pickups": 1,
+  "completed_pickup_quantity": 25.0,
+  "donations_by_status": {
+    "available": 1,
+    "cancelled": 0,
+    "claimed": 0,
+    "picked_up": 1
+  },
+  "quantities_by_status": {
+    "available": 12.0,
+    "cancelled": 0.0,
+    "claimed": 0.0,
+    "picked_up": 25.0
+  }
+}
