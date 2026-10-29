@@ -2,7 +2,7 @@
 
 **Project:** Cloud-Native Smart Food Redistribution and Analytics Platform Using Serverless Computing, ETL, and CI/CD
 **Assessment date:** 2026-10-29
-**Decision:** Local implementation is verified. AWS identity is now verified, but deployment remains blocked by missing IAM/GitHub configuration, unavailable billing evidence, and the absence of an approved change set.
+**Decision:** Local implementation and GitHub CI are verified. AWS identity is verified, but deployment remains blocked by missing IAM/GitHub configuration, unavailable billing evidence, and the absence of a prepared change set.
 
 ## Executive summary
 
@@ -10,9 +10,9 @@ This is an enhancement to the existing project, not a greenfield replacement. Th
 
 The optional target includes Cognito OIDC authorization-code + PKCE, API Gateway HTTP API JWT authorizer, Lambda, a DynamoDB single table with five GSIs, private S3, scoped Lambda IAM, CloudWatch logs, and a SAM template. Donation mutations and audit events are transactionally coupled in the DynamoDB adapter. A deadline index allows bounded expiry work to query due records instead of repeating an unrelated newest-record page.
 
-The `sharebite` IAM Identity Center profile was verified with `sts:GetCallerIdentity` as an assumed non-root role in the supplied account and target region. Read-only inventory found no CloudFormation stacks, Lambda functions, or DynamoDB tables in `ap-south-1`; S3 listed only `smartslot-datalake`, which is unrelated and must not be modified or reused. No AWS mutation, stack/change set, upload, or deployment was performed.
+The `sharebite` IAM Identity Center profile was verified with `sts:GetCallerIdentity` as `arn:aws:sts::721733429166:assumed-role/AWSReservedSSO_ShareBiteDeploy_600daa5af1121ef0/sharebite-deployer`. Read-only inventory found no ShareBite CloudFormation stack; earlier regional inventory listed no Lambda functions or DynamoDB tables. S3 listed only `smartslot-datalake`, which is unrelated and must not be modified or reused. The current role cannot list the OIDC provider or read several service resources. No AWS mutation, stack/change set, upload, or deployment was performed.
 
-The account's free-tier plan and spending history remain unverified: `freetier:GetAccountPlanState` and `ce:GetCostAndUsage` returned `AccessDenied`. IAM role-policy inspection and `access-analyzer:ValidatePolicy` are also denied, so generated IAM policy candidates cannot be treated as approved. GitHub environments exist, but read-only inspection found no required variables, reviewer rules, or deployment-branch restrictions. No deployment approval is included.
+The account's free-tier plan and spending history remain unverified: `freetier:GetAccountPlanState` and `ce:GetCostAndUsage` returned `AccessDenied`. IAM role-policy inspection and `access-analyzer:ValidatePolicy` are also denied, so generated IAM policy candidates cannot be treated as approved. `iam:ListOpenIDConnectProviders` is denied for resource `arn:aws:iam::721733429166:oidc-provider/*` to the active `ShareBiteDeploy` assumed role. Expected deployment roles and ShareBite buckets do not exist. GitHub CI run [40863469358](https://github.com/bharathselvas/sharebite/actions/runs/40863469358) passed on commit `beba997e7fd92dfc2ea8f00329eb60931f3d2376`. Both GitHub environments are now restricted to `main` with administrator bypass disabled, but `aws-demo` has no independent reviewer, and neither environment has its required variables. No change set or live deployment exists.
 
 ## Feature status and boundaries
 
@@ -28,12 +28,12 @@ The account's free-tier plan and spending history remain unverified: `freetier:G
 | Audit history | Backend-generated UTC events, actor/status metadata and request IDs; event reads role/participant scoped | Application audit data is not immutable or legally certified. No fabricated history for legacy records. |
 | ETL | Bounded Pandas CSV/JSON plus a manual-only cloud Lambda that reads DynamoDB and writes reports to private S3 | Local tests use fakes; no live invocation/object exists. No Glue/Athena use. |
 | Infrastructure | Parameterized SAM template for Cognito, API, Lambda, DynamoDB, private S3/CloudFront frontend, IAM, CloudWatch | SAM validation/build and `cfn-lint` passed locally. No stack/change set created. Five GSI, CloudFront, Cognito, and other cost drivers require review. |
-| CI/CD | Test-only CI and separate manual deployment workflow with approval inputs, `main` condition, OIDC, input validation | Historical CI run exists for old committed SHA only. Current environments have no variables/protections; OIDC trust and roles are unverified. |
+| CI/CD | Test-only CI and separate manual deployment workflow with approval inputs, `main` condition, OIDC, input validation | Current CI run 40863469358 passed. Environments allow only `main` and admins cannot bypass; independent reviewer, required variables, OIDC roles/provider, and AWS resources are still missing/unverified. |
 | Cost/security | Inventory, risk/limits, cleanup steps and approval boundary documented | No account-specific pricing/credit eligibility or spending cap is established. |
 
 ## AWS resource inventory (not deployed)
 
-The read-only inventory on 2026-10-29 returned no active stack summaries, Lambda functions, or DynamoDB tables in `ap-south-1`. The account-wide bucket listing returned only `smartslot-datalake`; it is not approved for ShareBite and must not be touched.
+The read-only inventory on 2026-10-29 returned no active stack summaries, Lambda functions, or DynamoDB tables in `ap-south-1`; current expected-resource reads for some Lambda/DynamoDB/Cognito items are denied and cannot prove absence. The account-wide bucket listing returned only `smartslot-datalake`; it is not approved for ShareBite and must not be touched. The expected ShareBite frontend and analytics buckets returned `NoSuchBucket`; the three expected deployment roles returned `NoSuchEntity`.
 
 The SAM template defines:
 
@@ -54,13 +54,13 @@ Record command outcomes in [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md
 
 - Local unit tests and fake AWS client behavior (not live integration).
 - Template lint and workflow YAML parsing (not stack deployment).
-- GitHub Actions history (not available unless an actual run exists).
+- GitHub Actions history (run 40863469358 passed, but does not indicate AWS deployment).
 - AWS Console/resource evidence (none exists in this assessment).
 
-Live user/login, API requests, logs, metrics, DynamoDB records, S3 objects, billing/credit eligibility, deployment, and cleanup have not been verified. Read-only AWS identity/inventory calls and GitHub environment inspection were performed; IAM and billing reads were denied. Do not present synthetic or mocked output as AWS evidence.
+Live user/login, API requests, logs, metrics, DynamoDB records, S3 objects, billing/credit eligibility, deployment, and cleanup have not been verified. Read-only AWS identity/inventory calls and GitHub environment inspection were performed; IAM and billing reads were denied. GitHub's main-only branch policies and disabled admin bypass are configured, but independent approval is still unavailable. Do not present synthetic or mocked output as AWS evidence.
 
-## Approval gate and next review
+## Deployment gate and next action
 
-No deployment approval is included. Before any future deployment, the user must explicitly approve after receiving the selected account/region, verified credit terms/plan, current itemized pricing drivers and usage assumptions, exact CloudFormation change set, IAM/OIDC review, deployment/artifact resource inventory, and cleanup procedure. Do not upgrade the account, configure credentials, upload data, or dispatch the deployment workflow in the meantime.
+The user explicitly authorized proceeding with deployment. Execution is still blocked before change-set creation: the active `ShareBiteDeploy` permission set cannot inspect or create the required OIDC provider and roles, account-specific billing and Free Tier status cannot be verified, the artifact/frontend/analytics buckets do not exist, and GitHub has no independent reviewer for `aws-demo`. The two GitHub environments have been restricted to `main`, administrator bypass disabled, and factual account/region variables set. Do not weaken the gate or reuse `smartslot-datalake`. After an AWS administrator provisions and validates the dedicated IAM roles, permissions boundary, and private buckets, and a second authorized GitHub collaborator is available as reviewer, run preflight and prepare (but do not execute) a change set for review.
 
 See [AWS Console and deployment guide](./docs/AWS_CONSOLE_DEPLOYMENT_GUIDE.md), [cost and security review](./COST_AND_SECURITY.md), and [architecture](./ARCHITECTURE.md).

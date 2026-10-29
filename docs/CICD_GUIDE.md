@@ -8,7 +8,7 @@
 - Frontend npm install from the lock file, TypeScript lint, and Vite production build.
 - Credential-marker checks, `cfn-lint`, workflow YAML parsing, and AWS SAM template validation.
 
-A successful local run is not evidence of a GitHub Actions run. SAM CLI and `cfn-lint` may not be installed in a local environment; report their absence rather than inferring validation.
+A successful local run is not evidence of a GitHub Actions run. Current verified run: [40863469358](https://github.com/bharathselvas/sharebite/actions/runs/40863469358), passing backend/ETL, frontend, and infrastructure jobs on commit `beba997e7fd92dfc2ea8f00329eb60931f3d2376`.
 
 ## Optional AWS deployment
 
@@ -41,7 +41,7 @@ Set these as environment variables, not secrets:
 | `aws-demo` | `AWS_REGION` = `ap-south-1`; `AWS_ACCOUNT_ID` = selected 12-digit account; `AWS_DEPLOY_ROLE_ARN` = dedicated GitHub OIDC deployment role ARN; `CFN_EXECUTION_ROLE_ARN` = dedicated CloudFormation service role ARN; `RUNTIME_PERMISSIONS_BOUNDARY_ARN` = pre-created IAM permissions-boundary policy ARN; `SAM_ARTIFACT_BUCKET` = approved, pre-created artifact bucket name. |
 | `aws-demo-review` | `AWS_REGION` = `ap-south-1`; `AWS_ACCOUNT_ID` = same selected account; `AWS_REVIEW_ROLE_ARN` = separate read-only GitHub OIDC role ARN. |
 
-Configure `aws-demo` to allow only the `main` branch, require an independent reviewer, and prevent self-approval where available. Do not configure reviewers on `aws-demo-review`; restrict its deployment branch to `main`. The review role must be read-only and distinct from the deployment and CloudFormation execution roles.
+Both environments are configured to allow only the `main` branch, and administrator bypass is disabled. `aws-demo` still needs an independent required reviewer; repository collaborator inspection returned only the repository owner, so self-approval is not configured. Do not configure reviewers on `aws-demo-review`. The review role must be read-only and distinct from the deployment and CloudFormation execution roles.
 
 ### Artifact bucket requirements
 

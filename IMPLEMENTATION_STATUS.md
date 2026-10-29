@@ -6,7 +6,7 @@
 
 The existing Git repository was refined in place as ShareBite. The UI includes an operations-focused admin overview with API-backed KPIs, activity/ETL/deadline summaries, date filters, a responsive donations table, and confirmation dialogs. Local donor/recipient workflows use FastAPI and SQLite. The cloud target includes a CloudFront-hosted private S3 frontend, Cognito JWT authorization, API Gateway, Lambda, DynamoDB, and a manually invoked Pandas ETL Lambda writing private S3 reports. These AWS resources are not deployed.
 
-On 2026-10-29, read-only AWS checks verified the `sharebite` Identity Center profile as an assumed non-root role in the supplied account and region. No CloudFormation stacks, Lambda functions, or DynamoDB tables were returned; the only listed S3 bucket was `smartslot-datalake`, which is unrelated and must not be touched. IAM policy inspection/validation and account billing/free-tier checks were denied. GitHub read-only checks found `aws-demo` and `aws-demo-review` exist but have no variables, reviewers, or deployment-branch restrictions. Nothing was deployed, uploaded, committed, or pushed.
+On 2026-10-29, `sts:GetCallerIdentity` verified the `sharebite` Identity Center session as the non-root assumed role `AWSReservedSSO_ShareBiteDeploy_600daa5af1121ef0`. No ShareBite stack exists; the only listed S3 bucket was `smartslot-datalake`, which is unrelated and must not be touched. IAM OIDC-provider listing and billing/free-tier reads were denied. GitHub CI run 40863469358 passed on commit `beba997e7fd92dfc2ea8f00329eb60931f3d2376`. Both deployment environments now allow only `main`, disable administrator bypass, and have the verified account/region variables set. Deployment role ARNs, the runtime boundary, artifact bucket, and an independent `aws-demo` reviewer are still missing. No AWS resources were created or uploaded.
 
 The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec92692758dfa843ec44658d001a5c2a03eb16c0d84b4ed431ef2a6ad1272`. Earlier browser smoke tests used a separate synthetic SQLite file at `/tmp/sharebite-ui-check-20261029.db`; no donation, account, or ETL mutation was submitted during that browser check.
 
@@ -26,8 +26,8 @@ The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec9
 | ETL | Implemented and locally tested | Bounded CSV/JSON transformation plus a cloud Lambda that scans actual DynamoDB records and writes six run-scoped S3 reports when deployed; no live invocation has occurred |
 | S3 integration | Two distinct paths | Local uploads are opt-in and tested with mocks. Cloud ETL writes to the template's private analytics bucket; no real S3 object exists. |
 | AWS target | Template/source only | CloudFront/OAC private frontend, Cognito PKCE, API Gateway JWT authorizer, Lambda, DynamoDB with five GSIs, separate private S3 buckets, IAM, CloudWatch retention; not live-tested |
-| CI/CD | Workflows configured; deployment blocked | Test CI has an older successful run for the current committed base SHA only. GitHub environments lack required variables and protection; no OIDC roles are verified. |
-| AWS Console/deployment | Not performed | Read-only account identity and inventory checks were performed. No stack, change set, project resources, live URL, ETL output, or deployment run exists. |
+| CI/CD | Test CI verified; deployment blocked | GitHub Actions run 40863469358 passed on `beba997e7fd92dfc2ea8f00329eb60931f3d2376`. Both deployment environments are main-only with admin bypass disabled. Required variables, an independent `aws-demo` reviewer, and OIDC roles/provider remain unavailable. |
+| AWS Console/deployment | Not performed | The assumed `ShareBiteDeploy` role identity was verified. No stack, change set, project resources, live URL, or deployment run exists. Billing/Free Tier reads and IAM OIDC provider listing were denied; never touch `smartslot-datalake`. |
 
 ## Final verification log
 
@@ -36,7 +36,7 @@ The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec9
 | `.venv/bin/python -m pytest -q` | **114 passed, 1 warning** (Starlette/httpx deprecation warning) |
 | Python compilation and shell syntax | **Passed** for backend, ETL, scripts, and shell wrappers |
 | `cd frontend && npm run lint && npm run build` | **Passed**; TypeScript check and Vite production build succeeded with placeholder Cognito/API values |
-| `.venv/bin/cfn-lint template.yaml` and `sam validate --lint --template-file template.yaml` | **Passed** in the prior validation session; `sam build --template-file template.yaml` also passed. SAM CLI is not currently on the normal PATH. |
+| `.venv/bin/cfn-lint template.yaml`, `sam validate --lint --template-file template.yaml`, and `sam build --template-file template.yaml` | **Passed** locally; GitHub infrastructure validation also passed in run 40863469358. SAM CLI was isolated under `/tmp`, not installed into the project. |
 | Parse both GitHub workflows and shell `run` blocks | **Passed**; workflow YAML and all extracted Bash scripts parsed |
 | `git diff --check` and source key/private-key marker scan | **Passed**; no common credential markers found |
 | IAM Policy Autopilot source analysis | **Passed as a local baseline only** for the Python API/ETL sources. Its generated runtime policies include broader table/bucket/KMS scopes and are not attachable without review. |
@@ -50,8 +50,8 @@ The original `backend/data/app.db` was not modified; its SHA-256 remains `e66ec9
 | AWS `sts get-caller-identity` | **Passed read-only**; expected account and assumed non-root `ShareBiteDeploy` Identity Center role verified |
 | AWS regional inventory | **Passed read-only**; no stack, Lambda function, or DynamoDB table listed; only `smartslot-datalake` listed as a bucket and explicitly excluded |
 | IAM role inspection, Access Analyzer policy validation, Cost Explorer, Free Tier | **Blocked** by `AccessDenied`; role permissions and account billing eligibility cannot be confirmed |
-| GitHub environments | **Read-only check passed**; both environments exist, but no variables, reviewers, or branch restrictions are configured |
-| GitHub Actions | **Historical PASS only** for run 40821608337 on the old committed base SHA; no run includes current uncommitted changes |
+| GitHub environments | Both exist; `aws-demo` and `aws-demo-review` now allow only `main`, and administrator bypass is disabled. Required variables and independent `aws-demo` reviewer remain unconfigured. |
+| GitHub Actions | **PASS** for run 40863469358 on `beba997e7fd92dfc2ea8f00329eb60931f3d2376`; backend/ETL, frontend, and infrastructure jobs succeeded. |
 | Live AWS deployment and cloud browser flow | **Not run**; no AWS mutations were authorized or performed |
 
 ## Important limitations
