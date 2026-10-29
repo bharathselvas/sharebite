@@ -248,8 +248,8 @@ def _cloudformation_execution_policy(
                 function_arns,
                 Condition={
                     "StringEquals": {"aws:SourceAccount": account_id},
-                    "StringLike": {
-                        "lambda:SourceArn": (
+                    "ArnLike": {
+                        "aws:SourceArn": (
                             f"arn:aws:execute-api:{REGION}:{account_id}:"
                             "*/*/*/api/*"
                         )
@@ -469,7 +469,6 @@ def build_artifacts(
                 [
                     "dynamodb:GetItem",
                     "dynamodb:PutItem",
-                    "dynamodb:TransactWriteItems",
                     "dynamodb:UpdateItem",
                 ],
                 table_arn,

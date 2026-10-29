@@ -82,6 +82,11 @@ def test_candidate_runtime_policies_and_permissions_boundary_are_role_scoped():
         statement for statement in boundary["Statement"]
         if statement["Sid"] == "AccessDonationRecords"
     )
+    assert api_access["Action"] == [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+    ]
     assert api_access["Condition"]["ArnEquals"]["aws:PrincipalArn"].endswith(
         "smart-food-demo-lambda-role"
     )
@@ -119,6 +124,20 @@ def test_cloudformation_policy_draft_is_account_scoped_and_has_no_wildcard_actio
     generated = artifacts()
     policy = generated["policies/cloudformation-execution-role-candidate.json"]
     statements = policy["Statement"]
+    api_permissions = next(
+        statement
+        for statement in statements
+        if statement["Sid"] == "ManageShareBiteApiLambdaPermissions"
+    )
+    assert api_permissions["Condition"] == {
+        "StringEquals": {"aws:SourceAccount": "123456789012"},
+        "ArnLike": {
+            "aws:SourceArn": (
+                "arn:aws:execute-api:ap-south-1:123456789012:"
+                "*/*/*/api/*"
+            )
+        },
+    }
     actions = {
         action
         for statement in statements
